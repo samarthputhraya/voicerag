@@ -126,6 +126,8 @@ export class SarvamRealtimeStt {
   private pending: Float32Array[] = [];
   /** Set when the caller flushed before the socket was ready. */
   private flushRequested = false;
+  /** True when at least one frame could not be sent or buffered. */
+  private dropped = false;
   private readonly cfg: Required<SarvamConfig>;
 
   constructor(cfg: SarvamConfig) {
@@ -264,6 +266,37 @@ export class SarvamRealtimeStt {
     }
     if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
       if (this.pending.length < 400) this.pending.push(new Float32Array(pcm));
+      else this.dropped = true; // buffer full; onSpeechEnd will resend in full
+      return;
+    }
+    // No socket at all yet, or it already closed. Nothing can hold this frame,
+    // so record that the stream is incomplete and let `onSpeechEnd` resend the
+    // whole utterance rather than transcribe a truncated one.
+    this.dropped = true;
+  }
+
+  /**
+   * Send the whole utterance, but only if the streaming path dropped any of it.
+   *
+   * The VAD hands the complete, pre-padded utterance to `onSpeechEnd`. That is
+   * strictly more reliable than the frame stream, which races the WebSocket
+   * handshake — but sending both would duplicate the audio and therefore the
+   * transcript. `dropped` is set only when a frame arrived with no socket at
+   * all to buffer it into, which is the one case the buffer cannot rescue.
+   */
+  sendUtteranceIfIncomplete(audio: Float32Array): void {
+    if (!this.dropped || this.ws?.readyState !== WebSocket.OPEN) return;
+    this.dropped = false;
+    // Chunked because one base64 blob of a long utterance is a large single
+    // frame, and Sarvam expects ~100 ms per message.
+    const CHUNK = 1600; // 100 ms at 16 kHz
+    for (let i = 0; i < audio.length; i += CHUNK) {
+      this.ws.send(
+        JSON.stringify({
+          event: "audio_input",
+          audio: toBase64(floatTo16BitPcm(audio.subarray(i, i + CHUNK))),
+        }),
+      );
     }
   }
 

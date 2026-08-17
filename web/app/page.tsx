@@ -314,12 +314,37 @@ export default function Home() {
     onFrameProcessed: (_p, frame: Float32Array) => {
       sttRef.current?.sendAudio(frame);
     },
-    onSpeechEnd: () => {
-      // We know the utterance ended before the server does. Say so immediately.
+    onSpeechEnd: (audio: Float32Array) => {
+      // The VAD hands back the COMPLETE utterance here, pre-speech padding
+      // included. Streaming frames is what gives us partial transcripts (and
+      // therefore speculative retrieval), but it is also the fragile path: it
+      // races the WebSocket handshake, and any frame lost before the socket
+      // opened is lost for good.
+      //
+      // So this is belt and braces. If the socket was not open in time to
+      // receive the whole utterance frame-by-frame, send it whole now. The
+      // relay is a byte pump, so a second copy of already-sent audio would
+      // duplicate the transcript -- hence `sendUtteranceIfIncomplete`, which
+      // sends only when the streaming path is known to have missed frames.
+      sttRef.current?.sendUtteranceIfIncomplete(audio);
       sttRef.current?.flush();
       setPhase("thinking");
     },
   });
+
+  // The VAD reports load failures here -- a 404 on the ONNX weights, a blocked
+  // AudioWorklet, an insecure origin. Without surfacing it the button simply
+  // sits on "Loading voice model…" forever and the microphone silently never
+  // works, which is indistinguishable from the app ignoring you.
+  useEffect(() => {
+    if (vad.errored) {
+      setError(
+        `Voice model failed to load: ${
+          typeof vad.errored === "string" ? vad.errored : "unknown error"
+        }. Typing still works.`,
+      );
+    }
+  }, [vad.errored]);
 
   const toggleMic = useCallback(() => {
     if (vad.listening) {
