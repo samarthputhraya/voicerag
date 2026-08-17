@@ -3,7 +3,11 @@ __pycache__/
 *.pyc
 .env
 data/
-reports/
+
+# reports/ is deliberately NOT ignored: reports/latency.* and reports/ablation.*
+# are the evidence for every number in the README. A reader who cannot see the
+# artifact has to take the table on trust, which is the whole thing this project
+# is trying not to do.
 node_modules/
 .next/
 .pytest_cache/

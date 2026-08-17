@@ -1,0 +1,527 @@
+{
+  "metrics": {
+    "tp": 7.0,
+    "fp": 4.0,
+    "tn": 396.0,
+    "fn": 774.0,
+    "precision": 0.6364,
+    "recall": 0.009,
+    "specificity": 0.99,
+    "f1": 0.0177,
+    "accuracy": 0.3412,
+    "balanced_accuracy": 0.4995,
+    "youden": -0.001,
+    "false_abstention_rate": 0.01,
+    "support": 1181.0
+  },
+  "confusion": {
+    "tp": 7,
+    "fp": 4,
+    "tn": 396,
+    "fn": 774
+  },
+  "n_answerable": 400,
+  "n_unanswerable": 781,
+  "threshold": 0.5,
+  "calibrated": false,
+  "sweep": [
+    {
+      "threshold": 0.1,
+      "precision": 0.6613,
+      "recall": 1.0,
+      "f1": 0.7961,
+      "accuracy": 0.6613,
+      "false_abstention_rate": 1.0
+    },
+    {
+      "threshold": 0.2,
+      "precision": 0.6591,
+      "recall": 0.9603,
+      "f1": 0.7817,
+      "accuracy": 0.6452,
+      "false_abstention_rate": 0.97
+    },
+    {
+      "threshold": 0.2043,
+      "precision": 0.6566,
+      "recall": 0.9424,
+      "f1": 0.7739,
+      "accuracy": 0.6359,
+      "false_abstention_rate": 0.9625
+    },
+    {
+      "threshold": 0.2169,
+      "precision": 0.6491,
+      "recall": 0.8835,
+      "f1": 0.7484,
+      "accuracy": 0.6071,
+      "false_abstention_rate": 0.9325
+    },
+    {
+      "threshold": 0.2254,
+      "precision": 0.6441,
+      "recall": 0.8271,
+      "f1": 0.7242,
+      "accuracy": 0.5834,
+      "false_abstention_rate": 0.8925
+    },
+    {
+      "threshold": 0.2363,
+      "precision": 0.6409,
+      "recall": 0.7746,
+      "f1": 0.7014,
+      "accuracy": 0.5639,
+      "false_abstention_rate": 0.8475
+    },
+    {
+      "threshold": 0.2494,
+      "precision": 0.6339,
+      "recall": 0.7183,
+      "f1": 0.6735,
+      "accuracy": 0.5394,
+      "false_abstention_rate": 0.81
+    },
+    {
+      "threshold": 0.261,
+      "precision": 0.6392,
+      "recall": 0.6761,
+      "f1": 0.6571,
+      "accuracy": 0.5334,
+      "false_abstention_rate": 0.745
+    },
+    {
+      "threshold": 0.27,
+      "precision": 0.6402,
+      "recall": 0.6287,
+      "f1": 0.6344,
+      "accuracy": 0.5207,
+      "false_abstention_rate": 0.69
+    },
+    {
+      "threshold": 0.2764,
+      "precision": 0.6319,
+      "recall": 0.5736,
+      "f1": 0.6013,
+      "accuracy": 0.497,
+      "false_abstention_rate": 0.6525
+    },
+    {
+      "threshold": 0.2822,
+      "precision": 0.6333,
+      "recall": 0.5262,
+      "f1": 0.5748,
+      "accuracy": 0.4852,
+      "false_abstention_rate": 0.595
+    },
+    {
+      "threshold": 0.2862,
+      "precision": 0.6379,
+      "recall": 0.4827,
+      "f1": 0.5496,
+      "accuracy": 0.4767,
+      "false_abstention_rate": 0.535
+    },
+    {
+      "threshold": 0.2902,
+      "precision": 0.6353,
+      "recall": 0.4328,
+      "f1": 0.5149,
+      "accuracy": 0.4606,
+      "false_abstention_rate": 0.485
+    },
+    {
+      "threshold": 0.2938,
+      "precision": 0.6433,
+      "recall": 0.388,
+      "f1": 0.484,
+      "accuracy": 0.453,
+      "false_abstention_rate": 0.42
+    },
+    {
+      "threshold": 0.2969,
+      "precision": 0.6562,
+      "recall": 0.347,
+      "f1": 0.4539,
+      "accuracy": 0.4479,
+      "false_abstention_rate": 0.355
+    },
+    {
+      "threshold": 0.2998,
+      "precision": 0.6761,
+      "recall": 0.3073,
+      "f1": 0.4225,
+      "accuracy": 0.4445,
+      "false_abstention_rate": 0.2875
+    },
+    {
+      "threshold": 0.3,
+      "precision": 0.6772,
+      "recall": 0.3009,
+      "f1": 0.4167,
+      "accuracy": 0.4428,
+      "false_abstention_rate": 0.28
+    },
+    {
+      "threshold": 0.3019,
+      "precision": 0.6712,
+      "recall": 0.2535,
+      "f1": 0.368,
+      "accuracy": 0.4242,
+      "false_abstention_rate": 0.2425
+    },
+    {
+      "threshold": 0.3046,
+      "precision": 0.6653,
+      "recall": 0.201,
+      "f1": 0.3088,
+      "accuracy": 0.4047,
+      "false_abstention_rate": 0.1975
+    },
+    {
+      "threshold": 0.3066,
+      "precision": 0.6685,
+      "recall": 0.1524,
+      "f1": 0.2482,
+      "accuracy": 0.3895,
+      "false_abstention_rate": 0.1475
+    },
+    {
+      "threshold": 0.3111,
+      "precision": 0.7059,
+      "recall": 0.1076,
+      "f1": 0.1867,
+      "accuracy": 0.3802,
+      "false_abstention_rate": 0.0875
+    },
+    {
+      "threshold": 0.3165,
+      "precision": 0.7667,
+      "recall": 0.0589,
+      "f1": 0.1094,
+      "accuracy": 0.3658,
+      "false_abstention_rate": 0.035
+    },
+    {
+      "threshold": 0.4,
+      "precision": 0.6364,
+      "recall": 0.009,
+      "f1": 0.0177,
+      "accuracy": 0.3412,
+      "false_abstention_rate": 0.01
+    },
+    {
+      "threshold": 0.5,
+      "precision": 0.6364,
+      "recall": 0.009,
+      "f1": 0.0177,
+      "accuracy": 0.3412,
+      "false_abstention_rate": 0.01
+    },
+    {
+      "threshold": 0.6,
+      "precision": 0.6364,
+      "recall": 0.009,
+      "f1": 0.0177,
+      "accuracy": 0.3412,
+      "false_abstention_rate": 0.01
+    },
+    {
+      "threshold": 0.7,
+      "precision": 1.0,
+      "recall": 0.0013,
+      "f1": 0.0026,
+      "accuracy": 0.3395,
+      "false_abstention_rate": 0.0
+    },
+    {
+      "threshold": 0.8,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "accuracy": 0.3387,
+      "false_abstention_rate": 0.0
+    },
+    {
+      "threshold": 0.9,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "accuracy": 0.3387,
+      "false_abstention_rate": 0.0
+    }
+  ],
+  "by_type": {
+    "DESCRIPTION": {
+      "n": 754.0,
+      "tp": 6.0,
+      "fp": 3.0,
+      "tn": 227.0,
+      "fn": 518.0,
+      "precision": 0.6667,
+      "recall": 0.0115,
+      "specificity": 0.987,
+      "f1": 0.0225,
+      "accuracy": 0.309,
+      "balanced_accuracy": 0.4992,
+      "youden": -0.0016,
+      "false_abstention_rate": 0.013,
+      "support": 754.0
+    },
+    "ENTITY": {
+      "n": 62.0,
+      "tp": 0.0,
+      "fp": 0.0,
+      "tn": 17.0,
+      "fn": 45.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "specificity": 1.0,
+      "f1": 0.0,
+      "accuracy": 0.2742,
+      "balanced_accuracy": 0.5,
+      "youden": 0.0,
+      "false_abstention_rate": 0.0,
+      "support": 62.0
+    },
+    "LOCATION": {
+      "n": 7.0,
+      "tp": 0.0,
+      "fp": 0.0,
+      "tn": 4.0,
+      "fn": 3.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "specificity": 1.0,
+      "f1": 0.0,
+      "accuracy": 0.5714,
+      "balanced_accuracy": 0.5,
+      "youden": 0.0,
+      "false_abstention_rate": 0.0,
+      "support": 7.0
+    },
+    "NUMERIC": {
+      "n": 330.0,
+      "tp": 1.0,
+      "fp": 1.0,
+      "tn": 135.0,
+      "fn": 193.0,
+      "precision": 0.5,
+      "recall": 0.0052,
+      "specificity": 0.9926,
+      "f1": 0.0102,
+      "accuracy": 0.4121,
+      "balanced_accuracy": 0.4989,
+      "youden": -0.0022,
+      "false_abstention_rate": 0.0074,
+      "support": 330.0
+    },
+    "PERSON": {
+      "n": 28.0,
+      "tp": 0.0,
+      "fp": 0.0,
+      "tn": 13.0,
+      "fn": 15.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "specificity": 1.0,
+      "f1": 0.0,
+      "accuracy": 0.4643,
+      "balanced_accuracy": 0.5,
+      "youden": 0.0,
+      "false_abstention_rate": 0.0,
+      "support": 28.0
+    }
+  },
+  "errors": [
+    {
+      "query_id": 1102208,
+      "query": "why does my knee hurt on and off",
+      "gold_unanswerable": true,
+      "abstained": false,
+      "confidence": 0.1199,
+      "reason": "Retrieval was confident: the score distribution is peaked (entropy 0.74 of a possible 1.00); the best passage reaches 0.85 similarity against a 0.30 floor.",
+      "signals": {
+        "n_hits": 10.0,
+        "max_score": 0.0328,
+        "score_gap": 0.005,
+        "rel_gap": 0.1534,
+        "entropy": 0.7396,
+        "agreement": 0.6,
+        "top1_agree": 1.0,
+        "dense_max": 0.8455,
+        "sparse_max": 14.3557
+      }
+    },
+    {
+      "query_id": 1100249,
+      "query": "glyc root word meaning",
+      "gold_unanswerable": true,
+      "abstained": false,
+      "confidence": 0.1377,
+      "reason": "Retrieval was confident: the score distribution is peaked (entropy 0.77 of a possible 1.00); the best passage reaches 0.63 similarity against a 0.30 floor.",
+      "signals": {
+        "n_hits": 10.0,
+        "max_score": 0.0308,
+        "score_gap": 0.0043,
+        "rel_gap": 0.1397,
+        "entropy": 0.7693,
+        "agreement": 0.6,
+        "top1_agree": 1.0,
+        "dense_max": 0.6302,
+        "sparse_max": 5.3832
+      }
+    },
+    {
+      "query_id": 249941,
+      "query": "how long does a physician have to sign an order for observation",
+      "gold_unanswerable": true,
+      "abstained": false,
+      "confidence": 0.1401,
+      "reason": "Retrieval was confident: the score distribution is peaked (entropy 0.66 of a possible 1.00); the best passage reaches 0.62 similarity against a 0.30 floor.",
+      "signals": {
+        "n_hits": 10.0,
+        "max_score": 0.0328,
+        "score_gap": 0.0054,
+        "rel_gap": 0.1646,
+        "entropy": 0.659,
+        "agreement": 0.5,
+        "top1_agree": 1.0,
+        "dense_max": 0.6197,
+        "sparse_max": 7.553
+      }
+    },
+    {
+      "query_id": 259449,
+      "query": "how long does rough hair shrink",
+      "gold_unanswerable": true,
+      "abstained": false,
+      "confidence": 0.1598,
+      "reason": "Retrieval was confident: the best passage reaches 0.80 similarity against a 0.30 floor; the score distribution is peaked (entropy 0.78 of a possible 1.00).",
+      "signals": {
+        "n_hits": 10.0,
+        "max_score": 0.0328,
+        "score_gap": 0.0029,
+        "rel_gap": 0.0877,
+        "entropy": 0.783,
+        "agreement": 0.7,
+        "top1_agree": 1.0,
+        "dense_max": 0.8018,
+        "sparse_max": 10.4857
+      }
+    },
+    {
+      "query_id": 146115,
+      "query": "difference between a celsius and pounds",
+      "gold_unanswerable": true,
+      "abstained": false,
+      "confidence": 0.1646,
+      "reason": "Retrieval was confident: the best passage reaches 0.71 similarity against a 0.30 floor; the score distribution is peaked (entropy 0.86 of a possible 1.00).",
+      "signals": {
+        "n_hits": 10.0,
+        "max_score": 0.0328,
+        "score_gap": 0.0026,
+        "rel_gap": 0.0802,
+        "entropy": 0.8606,
+        "agreement": 0.8,
+        "top1_agree": 1.0,
+        "dense_max": 0.7148,
+        "sparse_max": 7.3058
+      }
+    },
+    {
+      "query_id": 259244,
+      "query": "how long does plasma transfusion take to be successful?",
+      "gold_unanswerable": true,
+      "abstained": false,
+      "confidence": 0.1666,
+      "reason": "Retrieval was confident: the best passage reaches 0.82 similarity against a 0.30 floor; the score distribution is peaked (entropy 0.82 of a possible 1.00).",
+      "signals": {
+        "n_hits": 10.0,
+        "max_score": 0.0328,
+        "score_gap": 0.0027,
+        "rel_gap": 0.0814,
+        "entropy": 0.8171,
+        "agreement": 0.7,
+        "top1_agree": 1.0,
+        "dense_max": 0.8221,
+        "sparse_max": 9.8042
+      }
+    },
+    {
+      "query_id": 1059289,
+      "query": "what is bru",
+      "gold_unanswerable": true,
+      "abstained": false,
+      "confidence": 0.1667,
+      "reason": "Retrieval was confident: the score distribution is peaked (entropy 0.78 of a possible 1.00); the best passage reaches 0.69 similarity against a 0.30 floor.",
+      "signals": {
+        "n_hits": 10.0,
+        "max_score": 0.0328,
+        "score_gap": 0.0027,
+        "rel_gap": 0.0814,
+        "entropy": 0.7822,
+        "agreement": 0.7,
+        "top1_agree": 1.0,
+        "dense_max": 0.6907,
+        "sparse_max": 7.0179
+      }
+    },
+    {
+      "query_id": 1055302,
+      "query": "what is federal board",
+      "gold_unanswerable": true,
+      "abstained": false,
+      "confidence": 0.1671,
+      "reason": "Retrieval was confident: the score distribution is peaked (entropy 0.78 of a possible 1.00); the best passage reaches 0.73 similarity against a 0.30 floor.",
+      "signals": {
+        "n_hits": 10.0,
+        "max_score": 0.0328,
+        "score_gap": 0.0026,
+        "rel_gap": 0.0802,
+        "entropy": 0.7817,
+        "agreement": 0.7,
+        "top1_agree": 1.0,
+        "dense_max": 0.7298,
+        "sparse_max": 6.2825
+      }
+    },
+    {
+      "query_id": 280806,
+      "query": "how many days are there for human beings?",
+      "gold_unanswerable": true,
+      "abstained": false,
+      "confidence": 0.1697,
+      "reason": "Retrieval was confident: the best passage reaches 0.69 similarity against a 0.30 floor; the score distribution is peaked (entropy 0.85 of a possible 1.00).",
+      "signals": {
+        "n_hits": 10.0,
+        "max_score": 0.0315,
+        "score_gap": 0.0023,
+        "rel_gap": 0.0741,
+        "entropy": 0.8454,
+        "agreement": 0.8,
+        "top1_agree": 1.0,
+        "dense_max": 0.6906,
+        "sparse_max": 7.0292
+      }
+    },
+    {
+      "query_id": 315019,
+      "query": "how much does it cost to buy a great Florida Insurance franchise",
+      "gold_unanswerable": true,
+      "abstained": false,
+      "confidence": 0.1759,
+      "reason": "Retrieval was confident: the score distribution is peaked (entropy 0.67 of a possible 1.00); the best passage reaches 0.63 similarity against a 0.30 floor.",
+      "signals": {
+        "n_hits": 10.0,
+        "max_score": 0.0328,
+        "score_gap": 0.0038,
+        "rel_gap": 0.117,
+        "entropy": 0.6659,
+        "agreement": 0.5,
+        "top1_agree": 1.0,
+        "dense_max": 0.6321,
+        "sparse_max": 9.515
+      }
+    }
+  ]
+}
