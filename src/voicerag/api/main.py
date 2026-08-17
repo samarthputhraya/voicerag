@@ -37,6 +37,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -44,7 +45,7 @@ from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, Request, WebSocket, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from ..config import Settings, get_settings
 from ..harness.resilience import Deadline
@@ -63,6 +64,7 @@ from .schemas import (
 from .state import AppState
 from .stt_relay import relay_sarvam
 from .stt_token import TokenMintError, mint_token
+from .tts import TtsError, synthesize
 
 __all__ = ["app", "create_app", "SSE_MEDIA_TYPE"]
 
@@ -71,6 +73,56 @@ __all__ = ["app", "create_app", "SSE_MEDIA_TYPE"]
 SSE_MEDIA_TYPE = "text/event-stream"
 
 log = logging.getLogger("voicerag.api")
+
+
+#: Question words a preset must open with. MS MARCO's queries are real Bing
+#: searches, so the raw set is mostly keyword fragments ("bib lettuce wrap",
+#: "chart for foods low in potassium") rather than questions. Requiring an
+#: interrogative opener is what turns the sample into something a person would
+#: plausibly say out loud, which is the whole point of a voice demo.
+_QUESTION_OPENERS = (
+    "what ", "who ", "when ", "where ", "why ", "how ",
+    "which ", "is ", "are ", "does ", "do ", "can ",
+)
+
+#: Substrings that disqualify a preset outright. This is a demo shown to judges;
+#: MS MARCO is scraped from real search traffic and contains queries about
+#: bodies, salaries of named individuals, and worse. None of it is *unsafe* --
+#: the guardrails would pass it -- it is simply not what should be on screen.
+_PRESET_BLOCKLIST = (
+    "cup size", "bra ", "nude", "naked", "porn", "sex ", "sexual", "breast",
+    "penis", "vagina", "boob", "weight of ", "how much does ", "salary",
+    "net worth", "how old is", "died", "death of", "kill",
+)
+
+
+def _presentable_question(raw: str) -> str | None:
+    """Normalise one shard query, or reject it as unfit for a preset.
+
+    Returns a cleaned, capitalised question, or ``None`` if the query is a
+    keyword fragment, malformed, or on the blocklist above.
+    """
+    q = raw.strip().lstrip(". ").strip()
+    if not q:
+        return None
+    low = q.lower()
+
+    if not low.startswith(_QUESTION_OPENERS):
+        return None
+    if any(bad in low for bad in _PRESET_BLOCKLIST):
+        return None
+    # Long enough to be a real question, short enough to fit a chip.
+    if not (18 <= len(q) <= 68) or len(q.split()) < 4:
+        return None
+    # Interior punctuation is the signature of the shard's concatenation
+    # artefacts ("what is basic? uni").
+    if any(ch in q[:-1] for ch in "?!;|"):
+        return None
+    if not q[0].isalpha():
+        return None
+
+    q = q[0].upper() + q[1:]
+    return q if q.endswith("?") else q + "?"
 
 
 def _sse(event: str, data: Any) -> bytes:
@@ -394,6 +446,88 @@ def _register_routes(application: FastAPI, state: AppState, cfg: Settings) -> No
                 content=ErrorResponse(error="stt_unavailable", message=str(exc)).model_dump(),
             )
         return SttTokenResponse(**body)
+
+    @application.get("/examples", tags=["meta"])
+    async def examples(n: int = 8, seed: int = 0) -> dict[str, Any]:
+        """Questions this corpus can actually answer.
+
+        The single most common way this demo looks broken is a fair question it
+        was never going to answer. The index is a fixed ~196k-passage slice of
+        MS MARCO, not the web: "what is the capital of India" retrieves several
+        passages *about* India, none of which states the capital, and the system
+        correctly declines. From the outside that is indistinguishable from a
+        bug.
+
+        The manifest carries the shard's own labelled queries, so the honest fix
+        is to show a few. Sampled deterministically from the answerable set, so
+        the presets are stable across reloads and a demo can be rehearsed.
+        """
+        pool: list[str] = []
+        if state.bundle is not None:
+            for raw in state.bundle.manifest.get("example_queries", []):
+                q = _presentable_question(raw)
+                if q:
+                    pool.append(q)
+        if not pool:
+            return {"examples": [], "unanswerable_example": None, "n_indexed": 0}
+
+        rng = random.Random(seed)
+        picked = rng.sample(pool, min(n, len(pool)))
+
+        unanswerable = None
+        if state.bundle is not None:
+            for raw in state.bundle.manifest.get("example_unanswerable", []):
+                unanswerable = _presentable_question(raw)
+                if unanswerable:
+                    break
+
+        return {
+            "examples": picked,
+            # Offered separately and labelled: showing the system decline is
+            # half of requirement 6, and it should not happen by accident.
+            "unanswerable_example": unanswerable,
+            "n_indexed": 0 if state.pipeline is None else state.pipeline.n_chunks,
+        }
+
+    @application.post("/speak", tags=["stt"])
+    async def speak(request: Request) -> Response:
+        """Speak an answer. Returns `audio/wav`.
+
+        The other half of "voice-enabled": the pipeline listens, retrieves and
+        answers, and this is what makes the answer audible. Kept as a separate
+        call rather than folded into `/ask` so the text arrives (and renders)
+        the instant it exists, with audio following — a spoken answer that waits
+        for synthesis before showing anything would feel slower, not faster.
+        """
+        if not cfg.enable_tts:
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content=ErrorResponse(
+                    error="tts_disabled", message="speech synthesis is disabled"
+                ).model_dump(),
+            )
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        text = str(body.get("text") or "").strip()
+        language = str(body.get("language_code") or "en-IN")
+        if not text:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=ErrorResponse(error="empty_text", message="nothing to speak").model_dump(),
+            )
+        try:
+            audio = await synthesize(
+                text, cfg, language_code=language, speaker=cfg.sarvam_tts_speaker
+            )
+        except TtsError as exc:
+            log.warning("tts failed: %s", exc)
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content=ErrorResponse(error="tts_unavailable", message=str(exc)).model_dump(),
+            )
+        return Response(content=audio, media_type="audio/wav")
 
     @application.websocket("/stt/stream")
     async def stt_stream(websocket: WebSocket) -> None:

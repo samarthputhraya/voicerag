@@ -122,6 +122,10 @@ export function toBase64(buf: ArrayBuffer): string {
 export class SarvamRealtimeStt {
   private ws: WebSocket | null = null;
   private t0 = 0;
+  /** Frames captured before the socket opened. See `sendAudio`. */
+  private pending: Float32Array[] = [];
+  /** Set when the caller flushed before the socket was ready. */
+  private flushRequested = false;
   private readonly cfg: Required<SarvamConfig>;
 
   constructor(cfg: SarvamConfig) {
@@ -176,6 +180,13 @@ export class SarvamRealtimeStt {
       const timer = setTimeout(() => reject(new Error("stt connect timeout")), 8000);
       ws.onopen = () => {
         clearTimeout(timer);
+        // Anything the microphone produced during the handshake is sent now,
+        // in order, before the first live frame.
+        this.flushPending();
+        if (this.flushRequested) {
+          this.flushRequested = false;
+          ws.send(JSON.stringify({ event: "flush" }));
+        }
         resolve();
       };
     });
@@ -226,11 +237,46 @@ export class SarvamRealtimeStt {
   }
 
   /** Send one frame of 16 kHz mono audio. */
+  /**
+   * Queue one frame of microphone audio.
+   *
+   * Frames that arrive before the socket is OPEN are **buffered, not dropped**.
+   * This used to be `if (readyState !== OPEN) return;`, which silently threw
+   * away every frame between the user starting to speak and the WebSocket
+   * completing its handshake -- our relay's, then Sarvam's, measured at
+   * 300-800 ms. For a two-second question that is the first third of the audio,
+   * and it is the worst third to lose: it contains the question word. "What is
+   * a corporation?" arrived at the recogniser as "...a corporation?", and short
+   * questions could finish and flush before the socket opened at all, so
+   * nothing was ever sent and the app simply never answered.
+   *
+   * The cap is a safety valve, not a tuning knob: it bounds memory if the
+   * socket never opens. 16 kHz mono float32 is 64 KB/s, so 400 frames of ~32 ms
+   * is roughly 13 seconds of speech.
+   */
   sendAudio(pcm: Float32Array): void {
-    if (this.ws?.readyState !== WebSocket.OPEN) return;
-    this.ws.send(
-      JSON.stringify({ event: "audio_input", audio: toBase64(floatTo16BitPcm(pcm)) }),
-    );
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.flushPending();
+      this.ws.send(
+        JSON.stringify({ event: "audio_input", audio: toBase64(floatTo16BitPcm(pcm)) }),
+      );
+      return;
+    }
+    if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+      if (this.pending.length < 400) this.pending.push(new Float32Array(pcm));
+    }
+  }
+
+  /** Drain frames captured while the socket was still connecting. */
+  private flushPending(): void {
+    if (!this.pending.length || this.ws?.readyState !== WebSocket.OPEN) return;
+    const queued = this.pending;
+    this.pending = [];
+    for (const frame of queued) {
+      this.ws.send(
+        JSON.stringify({ event: "audio_input", audio: toBase64(floatTo16BitPcm(frame)) }),
+      );
+    }
   }
 
   /**
@@ -240,11 +286,21 @@ export class SarvamRealtimeStt {
    * beat is worth more than any model-side optimisation available to us.
    */
   flush(): void {
-    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      // A short question can end before the handshake completes. Remember the
+      // intent and honour it on open, otherwise the buffered audio sits in the
+      // socket with nothing ever telling Sarvam the utterance finished, and the
+      // UI waits forever for a final transcript that cannot arrive.
+      this.flushRequested = true;
+      return;
+    }
+    this.flushPending();
     this.ws.send(JSON.stringify({ event: "flush" }));
   }
 
   close(): void {
+    this.pending = [];
+    this.flushRequested = false;
     this.ws?.close();
     this.ws = null;
   }

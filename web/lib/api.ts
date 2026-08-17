@@ -173,3 +173,57 @@ export async function fetchStats(): Promise<Stats> {
   if (!r.ok) throw new Error(`stats failed: ${r.status}`);
   return r.json();
 }
+
+export interface Examples {
+  examples: string[];
+  unanswerable_example: string | null;
+  n_indexed: number;
+}
+
+/**
+ * Questions the served corpus actually contains answers for.
+ *
+ * Sampled server-side from the shard's own labelled query set, so the presets
+ * cannot drift from whatever index is loaded. Falls back to an empty list
+ * rather than throwing: a demo with no example chips is worse than one with
+ * them, but far better than one that fails to render.
+ */
+export async function fetchExamples(n = 6): Promise<Examples> {
+  try {
+    const r = await fetch(`${API_BASE}/examples?n=${n}`);
+    if (!r.ok) throw new Error(String(r.status));
+    return r.json();
+  } catch {
+    return { examples: [], unanswerable_example: null, n_indexed: 0 };
+  }
+}
+
+/**
+ * Speak an answer aloud.
+ *
+ * Called after the text has already rendered, never before: synthesis costs
+ * ~1.4 s, and blocking the answer on it would trade the thing we optimised
+ * hardest for (time to first token) against an ornament. The user reads the
+ * first sentence while the audio is still being made.
+ *
+ * Returns an object URL the caller must revoke, or null if synthesis was
+ * refused — a demo should stay usable when TTS is unavailable, not error.
+ */
+export async function speak(
+  text: string,
+  languageCode = "en-IN",
+  signal?: AbortSignal,
+): Promise<string | null> {
+  try {
+    const r = await fetch(`${API_BASE}/speak`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text, language_code: languageCode }),
+      signal,
+    });
+    if (!r.ok) return null;
+    return URL.createObjectURL(await r.blob());
+  } catch {
+    return null;
+  }
+}

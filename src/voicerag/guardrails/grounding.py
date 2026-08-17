@@ -550,8 +550,14 @@ class GroundingChecker:
         hard_fail = bool(bad_numbers or invalid or unsupported_cites)
         supported = best_score >= cfg.claim_threshold and not hard_fail
         if not supported and not reasons:
+            # Phrased as a verb phrase, like every other reason above, because
+            # the refusal text in guardrails.policy joins these onto "it ...".
+            # As a standalone clause this produced "it only 0% of its content
+            # words appear in any retrieved passage", which is ungrammatical and
+            # was being shown to users.
             reasons.append(
-                f"only {best_cov:.0%} of its content words appear in any retrieved passage"
+                f"appears in no retrieved passage "
+                f"(only {best_cov:.0%} of its content words matched)"
             )
 
         return ClaimVerdict(

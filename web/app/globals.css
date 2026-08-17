@@ -1,75 +1,202 @@
+/*
+ * VoiceRAG — visual language.
+ *
+ * Built to sit alongside hhgoa.com rather than beside a generic AI demo. The
+ * organisers' site is light, high-contrast and editorial: near-black on warm
+ * white, photography-led, uppercase letter-spaced metadata against big tight
+ * headlines, and copy that is deliberately unshowy — "Less Noise. More Signal",
+ * "4 days. one rhythm. everything intentional."
+ *
+ * Three decisions follow from that and drive everything below.
+ *
+ * 1. **Light, not dark.** Every RAG demo is a dark terminal with cyan accents.
+ *    This one is a document. It is also the harder choice: on a light ground
+ *    there is nowhere to hide sloppy spacing or muddy hierarchy.
+ *
+ * 2. **The receipt is the product.** The project's actual claim is that every
+ *    millisecond and every citation is accounted for. So the latency HUD and
+ *    the sources are not footnotes in a drawer — they are set as editorial
+ *    apparatus, with the same care as the answer.
+ *
+ * 3. **Metadata in small caps, content in big type.** Labels are 11px, 0.14em
+ *    tracked, uppercase. Headlines are tight (-0.03em) and heavy. The contrast
+ *    between those two registers is the whole look; it is why this reads as
+ *    designed rather than themed.
+ */
+
 :root {
-  color-scheme: dark;
-  --bg: #060a14;
-  --panel: #0b1220;
-  --line: #1e293b;
-  --text: #e2e8f0;
-  --muted: #64748b;
-  --accent: #22d3ee;
-  --ok: #34d399;
-  --warn: #f59e0b;
-  --bad: #fb7185;
+  /* Warm paper, not clinical white. The organisers' site sits on daylight. */
+  --paper: #fbfaf7;
+  --paper-2: #ffffff;
+  --ink: #0d0f12;
+  --ink-2: #3d434d;
+  --ink-3: #767d89;
+  --rule: #e4e1da;
+  --rule-2: #cfcbc1;
+
+  /* Ocean, because the event is on a beach in Goa. Used sparingly: it marks
+     live state and nothing else, so "the accent is on" always means something. */
+  --sea: #0d7d8c;
+  --sea-deep: #075965;
+  --sea-wash: #e6f2f3;
+
+  /* Sun, for the speaking/active state. */
+  --sun: #d9822b;
+  --sun-wash: #fdf1e3;
+
+  --ok: #1d7a4c;
+  --bad: #b3261e;
+  --bad-wash: #fdecea;
+
+  --shadow-sm: 0 1px 2px rgba(13, 15, 18, 0.05);
+  --shadow-md: 0 10px 30px -12px rgba(13, 15, 18, 0.18);
+
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 16px;
+
+  --measure: 1080px;
 }
 
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
-html,
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
-  padding: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  font-size: 15px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  font-size: 16px;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+
+  /* A very faint horizon wash at the top of the page. It is the only
+     decoration on the whole ground, and it is what stops warm white from
+     reading as "unstyled". */
+  background-image:
+    radial-gradient(120% 60% at 50% -10%, var(--sea-wash) 0%, transparent 62%);
+  background-repeat: no-repeat;
 }
 
 main {
-  max-width: 780px;
+  max-width: var(--measure);
   margin: 0 auto;
-  padding: 48px 24px 96px;
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
+  padding: 40px 24px 96px;
 }
 
-/* --- header --- */
+/* --- the label register ---
+   Every small uppercase label on the page. Doing this once is what keeps the
+   two type registers honest. */
+.pl,
+.eyebrow,
+.hud h2,
+.cites h2,
+.guard h2,
+.abstain-tag {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+/* --- masthead --- */
 
 .top {
   display: flex;
-  align-items: flex-start;
+  align-items: flex-end;
   justify-content: space-between;
-  gap: 20px;
+  gap: 28px;
+  flex-wrap: wrap;
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.brand-mark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.brand-mark .wave {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  color: var(--sea);
+}
+
+.eyebrow {
+  color: var(--ink-3);
 }
 
 .top h1 {
   margin: 0;
-  font-size: 26px;
-  font-weight: 680;
-  letter-spacing: -0.02em;
+  font-size: clamp(38px, 6vw, 62px);
+  line-height: 0.98;
+  font-weight: 760;
+  letter-spacing: -0.035em;
+}
+
+.top h1 .thin {
+  font-weight: 300;
+  color: var(--ink-3);
 }
 
 .sub {
-  margin: 6px 0 0;
-  color: var(--muted);
-  font-size: 14px;
+  margin: 12px 0 0;
   max-width: 46ch;
+  font-size: 15.5px;
+  color: var(--ink-2);
 }
 
-.top select {
-  background: var(--panel);
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 7px 11px;
-  font-size: 13px;
+.top-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+select {
+  appearance: none;
+  background: var(--paper-2)
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M2 4.5L6 8.5L10 4.5' stroke='%23767d89' stroke-width='1.6' fill='none' stroke-linecap='round'/></svg>")
+    no-repeat right 12px center;
+  color: var(--ink);
+  border: 1px solid var(--rule-2);
+  border-radius: 999px;
+  padding: 9px 34px 9px 15px;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 550;
   cursor: pointer;
 }
 
-/* --- mic --- */
+select:focus-visible {
+  outline: 2px solid var(--sea);
+  outline-offset: 2px;
+}
+
+/* --- ask surface --- */
+
+.ask {
+  margin-top: 34px;
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md);
+  padding: 26px;
+}
 
 .mic-row {
   display: flex;
@@ -82,318 +209,412 @@ main {
   display: inline-flex;
   align-items: center;
   gap: 11px;
-  background: var(--panel);
-  color: var(--text);
-  border: 1px solid var(--line);
+  background: var(--ink);
+  color: #fff;
+  border: 1px solid var(--ink);
   border-radius: 999px;
-  padding: 12px 22px;
-  font-size: 14px;
-  font-weight: 550;
+  padding: 14px 26px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   cursor: pointer;
-  transition: border-color 160ms ease, background 160ms ease;
+  transition:
+    transform 140ms ease,
+    box-shadow 140ms ease,
+    background 140ms ease;
 }
 
 .mic:hover:not(:disabled) {
-  border-color: #334155;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
 }
 
 .mic:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: progress;
+}
+
+.mic.on {
+  background: var(--sea);
+  border-color: var(--sea);
 }
 
 .mic .dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: var(--muted);
-  transition: background 160ms ease;
-}
-
-.mic.on {
-  border-color: rgba(34, 211, 238, 0.45);
-  background: rgba(34, 211, 238, 0.07);
+  background: currentColor;
+  opacity: 0.5;
 }
 
 .mic.on .dot {
-  background: var(--accent);
+  opacity: 1;
   animation: pulse 1.15s ease-in-out infinite;
 }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.35; transform: scale(0.82); }
+  50% { opacity: 0.3; transform: scale(0.72); }
 }
-
-/* --- typed input + preset chips ---
-   The keyboard path is not a courtesy. A denied microphone is a coin flip on a
-   judge's managed browser, and without this the entire system -- retrieval,
-   guardrails, citations, HUD -- is unreachable behind one Block click. */
 
 .type-row {
   display: flex;
   gap: 10px;
-  margin-top: 14px;
+  margin-top: 18px;
 }
 
 .type-row input {
   flex: 1;
-  background: var(--panel);
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 11px 14px;
-  font-size: 14px;
-  font-family: inherit;
+  min-width: 0;
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-md);
+  padding: 13px 16px;
+  font: inherit;
+  font-size: 15px;
 }
 
-.type-row input::placeholder { color: var(--muted); }
+.type-row input::placeholder { color: var(--ink-3); }
 
 .type-row input:focus {
   outline: none;
-  border-color: rgba(34, 211, 238, 0.45);
+  border-color: var(--sea);
+  box-shadow: 0 0 0 3px var(--sea-wash);
 }
 
 .type-row input:disabled { opacity: 0.55; }
 
 .type-row button {
-  background: var(--panel);
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 11px 20px;
-  font-size: 14px;
-  font-weight: 550;
+  background: var(--paper-2);
+  color: var(--ink);
+  border: 1px solid var(--ink);
+  border-radius: var(--r-md);
+  padding: 13px 24px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
   cursor: pointer;
-  transition: border-color 160ms ease;
+  transition: background 140ms ease, color 140ms ease;
 }
 
-.type-row button:hover:not(:disabled) { border-color: #334155; }
-.type-row button:disabled { opacity: 0.4; cursor: default; }
+.type-row button:hover:not(:disabled) {
+  background: var(--ink);
+  color: #fff;
+}
+
+.type-row button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.chips-head {
+  margin: 20px 0 9px;
+}
 
 .chips {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 10px;
 }
 
 .chip {
   background: transparent;
-  color: var(--muted);
-  border: 1px dashed var(--line);
+  color: var(--ink-2);
+  border: 1px solid var(--rule-2);
   border-radius: 999px;
-  padding: 6px 13px;
-  font-size: 12.5px;
-  font-family: inherit;
+  padding: 7px 14px;
+  font: inherit;
+  font-size: 13px;
   cursor: pointer;
-  transition: color 160ms ease, border-color 160ms ease;
+  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
 }
 
 .chip:hover {
-  color: var(--text);
-  border-color: #334155;
+  color: var(--ink);
+  border-color: var(--ink);
+  background: var(--paper-2);
 }
 
-/* --- phase pill --- */
+/* The one preset the corpus cannot answer, marked so a refusal on camera is
+   deliberate rather than an accident. */
+.chip.decline {
+  border-style: dashed;
+  color: var(--ink-3);
+}
+
+.chip.decline:hover {
+  border-color: var(--sun);
+  color: var(--sun);
+  background: var(--sun-wash);
+}
+
+/* --- transcript + status --- */
 
 .pill {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--muted);
-  padding: 6px 12px;
+  gap: 9px;
+  border: 1px solid var(--rule-2);
   border-radius: 999px;
-  border: 1px solid var(--line);
+  padding: 7px 15px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  background: var(--paper-2);
 }
 
-.pill.listening { color: var(--accent); border-color: rgba(34, 211, 238, 0.35); }
-.pill.thinking  { color: var(--warn);   border-color: rgba(245, 158, 11, 0.35); }
-.pill.answering { color: var(--ok);     border-color: rgba(52, 211, 153, 0.35); }
-.pill.error     { color: var(--bad);    border-color: rgba(251, 113, 133, 0.35); }
+.pill.listening { border-color: var(--sea); color: var(--sea); background: var(--sea-wash); }
+.pill.thinking,
+.pill.answering { border-color: var(--sun); color: var(--sun); background: var(--sun-wash); }
+.pill.error { border-color: var(--bad); color: var(--bad); background: var(--bad-wash); }
 
 .pill .spec {
-  text-transform: none;
-  letter-spacing: 0;
   font-weight: 500;
-  color: var(--muted);
-  padding-left: 10px;
-  border-left: 1px solid var(--line);
+  color: var(--ink-3);
+  border-left: 1px solid var(--rule-2);
+  padding-left: 9px;
 }
 
-/* --- transcript --- */
-
-.pl {
-  display: inline-block;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin-right: 10px;
-  vertical-align: 1px;
-}
-
-.partial {
-  margin: 0;
-  color: #94a3b8;
+.partial,
+.question {
+  margin: 22px 0 0;
   font-size: 17px;
+  color: var(--ink-2);
 }
 
 .question {
-  margin: 0;
-  font-size: 18px;
+  color: var(--ink);
   font-weight: 550;
+}
+
+.pl {
+  margin-right: 10px;
 }
 
 .caret {
   display: inline-block;
   width: 2px;
   height: 1.05em;
-  background: var(--accent);
+  background: var(--sea);
   margin-left: 3px;
-  vertical-align: -2px;
-  animation: blink 1s step-end infinite;
+  vertical-align: -0.16em;
+  animation: blink 1s steps(2, start) infinite;
 }
 
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
+@keyframes blink { 50% { opacity: 0; } }
+
+.error {
+  margin-top: 20px;
+  border: 1px solid var(--bad);
+  background: var(--bad-wash);
+  color: var(--bad);
+  border-radius: var(--r-md);
+  padding: 13px 16px;
+  font-size: 14.5px;
 }
 
 /* --- answer --- */
 
 .answer {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--ok);
-  border-radius: 10px;
-  padding: 16px 20px;
+  margin-top: 26px;
+  padding-left: 22px;
+  border-left: 3px solid var(--ink);
 }
 
 .answer p {
   margin: 0;
-  font-size: 16px;
-  line-height: 1.65;
+  font-size: clamp(20px, 2.5vw, 26px);
+  line-height: 1.4;
+  letter-spacing: -0.017em;
+  font-weight: 480;
 }
 
 .answer.abstained {
-  border-left-color: var(--warn);
+  border-left-color: var(--sun);
+}
+
+.answer.abstained p {
+  font-size: 17px;
+  color: var(--ink-2);
+  font-weight: 420;
 }
 
 .abstain-tag {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--warn);
-  margin-bottom: 8px;
+  color: var(--sun);
+  margin-bottom: 9px;
 }
 
-.error {
-  margin: 0;
-  color: var(--bad);
-  font-size: 14px;
-  background: rgba(251, 113, 133, 0.08);
-  border: 1px solid rgba(251, 113, 133, 0.25);
-  border-radius: 8px;
-  padding: 11px 15px;
+.speaking-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sea);
 }
 
-/* --- citations --- */
+.speaking-tag .bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 12px;
+}
+
+.speaking-tag .bars i {
+  width: 2.5px;
+  background: var(--sea);
+  border-radius: 1px;
+  animation: eq 900ms ease-in-out infinite;
+}
+
+.speaking-tag .bars i:nth-child(1) { height: 40%; animation-delay: 0ms; }
+.speaking-tag .bars i:nth-child(2) { height: 100%; animation-delay: 140ms; }
+.speaking-tag .bars i:nth-child(3) { height: 65%; animation-delay: 280ms; }
+
+@keyframes eq {
+  0%, 100% { transform: scaleY(0.4); }
+  50% { transform: scaleY(1); }
+}
+
+.mute-btn {
+  background: none;
+  border: none;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.mute-btn:hover { color: var(--ink); }
+
+/* --- sources --- */
+
+.cites {
+  margin-top: 40px;
+  padding-top: 22px;
+  border-top: 1px solid var(--rule);
+}
 
 .cites h2,
-.guards h2 {
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin: 0 0 10px;
+.guard h2,
+.hud h2 {
+  margin: 0 0 14px;
 }
 
 .cites ol {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  display: grid;
+  gap: 10px;
 }
 
 .cites li {
-  display: flex;
-  gap: 11px;
-  align-items: flex-start;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 11px 14px;
-  font-size: 13.5px;
+  display: grid;
+  grid-template-columns: 30px 1fr auto;
+  gap: 12px;
+  align-items: start;
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  padding: 13px 15px;
+  font-size: 14px;
 }
 
 .ci {
-  color: var(--accent);
-  font-weight: 650;
+  font-weight: 700;
+  color: var(--sea);
   font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
 }
 
-.ct {
-  color: #cbd5e1;
-  flex: 1;
-}
+.ct { color: var(--ink-2); }
 
 .cs {
-  color: var(--muted);
   font-variant-numeric: tabular-nums;
   font-size: 12px;
-  flex-shrink: 0;
+  color: var(--ink-3);
+  white-space: nowrap;
 }
 
 /* --- guardrails --- */
 
-.grow {
-  display: flex;
+.guard {
+  margin-top: 34px;
+  padding-top: 22px;
+  border-top: 1px solid var(--rule);
+}
+
+.guard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 10px;
-  flex-wrap: wrap;
 }
 
-.chk {
-  flex: 1 1 180px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 11px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+.guard-card {
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  padding: 14px 15px;
 }
 
-.chk strong {
-  font-size: 13px;
+.guard-card .k {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.guard-card .v {
+  margin-top: 5px;
+  font-size: 15px;
   font-weight: 600;
 }
 
-.chk em {
-  font-style: normal;
-  font-size: 12px;
-  color: var(--muted);
-}
+.guard-card.pass .v { color: var(--ok); }
+.guard-card.fail .v { color: var(--bad); }
 
-.chk.ok strong      { color: var(--ok); }
-.chk.bad strong     { color: var(--bad); }
-.chk.neutral strong { color: var(--warn); }
+/* --- latency hud --- */
+
+.hud {
+  margin-top: 34px;
+  padding-top: 22px;
+  border-top: 1px solid var(--rule);
+}
 
 /* --- footer --- */
 
 .foot {
-  color: var(--muted);
-  font-size: 12px;
-  border-top: 1px solid var(--line);
-  padding-top: 14px;
+  margin-top: 52px;
+  padding-top: 18px;
+  border-top: 1px solid var(--rule);
+  font-size: 12.5px;
+  color: var(--ink-3);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.foot .dot-sep { color: var(--rule-2); }
+
+@media (max-width: 640px) {
+  main { padding: 28px 16px 72px; }
+  .ask { padding: 18px; }
+  .cites li { grid-template-columns: 24px 1fr; }
+  .cs { grid-column: 2; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }

@@ -38,6 +38,11 @@ __all__ = [
 
 log = logging.getLogger("voicerag.api")
 
+#: How many labelled questions to keep in memory for ``GET /examples``. A few
+#: hundred short strings is well under a megabyte and is plenty to sample a
+#: handful of presets from; the full set can run to tens of thousands.
+_EXAMPLE_POOL = 400
+
 
 class IndexBundle:
     """A loaded index and the embedder that produced its vectors.
@@ -102,11 +107,26 @@ def load_index(settings: Settings | None = None) -> IndexBundle | None:
     manifest_path = directory / "manifest.json"
     if manifest_path.exists():
         raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-        # The manifest embeds the evaluation query set, which can be megabytes.
-        # Only the build description is useful at serving time.
+        # The manifest embeds the evaluation query set and its qrels, which run
+        # to megabytes and are useless at serving time. Drop them -- but keep a
+        # small sample of the *questions*, because `GET /examples` needs them.
+        #
+        # That endpoint exists for a real failure: the index is a fixed slice of
+        # MS MARCO, not the web, so a fair question like "what is the capital of
+        # India" retrieves passages about India, none of which states the
+        # capital, and the system correctly declines. From the outside that is
+        # indistinguishable from a broken demo. Showing questions the corpus can
+        # actually answer is the fix, and it must come from the loaded index so
+        # it cannot drift from whatever is being served.
         manifest = {
             k: v for k, v in raw.items() if k not in ("queries", "qrels", "unanswerable")
         }
+        manifest["example_queries"] = [
+            str(q.get("eng_query") or "") for q in raw.get("queries", [])[:_EXAMPLE_POOL]
+        ]
+        manifest["example_unanswerable"] = [
+            str(q.get("eng_query") or "") for q in raw.get("unanswerable", [])[:_EXAMPLE_POOL]
+        ]
 
     hybrid = HybridIndex.load(directory, mmap_sparse=cfg.mmap_sparse)
     store = ChunkStore.load(directory / "store")

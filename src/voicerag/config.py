@@ -118,6 +118,11 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.5-flash-lite"
     openai_model: str = "gpt-4o-mini"
     sarvam_model: str = "saaras:v3-realtime"
+    #: Text-to-speech, so the answer is spoken and not merely printed. The brief
+    #: asks for voice in *and* out; without this the second half stops at text.
+    sarvam_tts_model: str = "bulbul:v2"
+    sarvam_tts_speaker: str = "anushka"
+    enable_tts: bool = True
     sarvam_batch_model: str = "saaras:v3"
     elevenlabs_model: str = "scribe_v2_realtime"
     stt_language: str = Field(

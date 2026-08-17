@@ -68,7 +68,10 @@ def test_env_example_parses_and_configures_nothing(tmp_path: Path) -> None:
     # once already and produced one-word answers on every question.
     assert settings.embedder_spec == "static:minishlab/potion-base-8M"
     assert settings.chunking_strategy == "recursive"
-    assert settings.budget_total_ms == 2500.0
+    # Generous on purpose. Measured, real Groq calls from India land between
+    # 0.5 s and 4.4 s wall clock; a tighter serving deadline truncates the
+    # slower ones mid-sentence and hands back the fragment as a cited answer.
+    assert settings.budget_total_ms >= 5000.0
     del tmp_path
 
 

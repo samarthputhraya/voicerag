@@ -26,7 +26,9 @@ import { useMicVAD } from "@ricky0123/vad-react";
 
 import LatencyHud, { splitBreakdown, type StageBar } from "../components/LatencyHud";
 import {
+  fetchExamples,
   fetchStats,
+  speak,
   speculate,
   streamAnswer,
   type Citation,
@@ -79,22 +81,6 @@ const LANGUAGES = [
   { code: "auto", label: "Auto-detect" },
 ] as const;
 
-/**
- * One-click questions, each verified to return a grounded answer with citations
- * against the shipped index. A demo that depends on the viewer inventing a good
- * question is a demo that fails in front of the one person who matters.
- *
- * The last is deliberately unanswerable: it shows the system declining rather
- * than guessing, which is the half of requirement 6 that is easy to claim and
- * hard to show.
- */
-const PRESETS = [
-  "What is a corporation?",
-  "What is the difference between honesty and integrity?",
-  "What is the boiling point of water?",
-  "What is the capital of the moon colony of Zorblax?",
-] as const;
-
 type Phase = "idle" | "listening" | "thinking" | "answering" | "done" | "error";
 
 export default function Home() {
@@ -108,6 +94,21 @@ export default function Home() {
   const [stages, setStages] = useState<StageBar[]>([]);
   const [pipelineMs, setPipelineMs] = useState(0);
   const [generationMs, setGenerationMs] = useState(0);
+  const [examples, setExamples] = useState<string[]>([]);
+  const [unanswerable, setUnanswerable] = useState<string | null>(null);
+  const [voiceOn, setVoiceOn] = useState(true);
+  // Read inside `onFinal`, which captured its closure before the toggle could
+  // change; a ref keeps `ask` out of the dependency churn.
+  const voiceOnRef = useRef(true);
+  const [speaking, setSpeaking] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
+  /**
+   * The streamed answer, readable from inside the `onFinal` closure.
+   * `answer` state is stale there because the closure captured it before the
+   * tokens arrived; reading a ref avoids re-creating `ask` on every token.
+   */
+  const answerRef = useRef("");
   const [history, setHistory] = useState<number[]>([]);
   const [speculations, setSpeculations] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -119,10 +120,66 @@ export default function Home() {
   const clockRef = useRef(0);
 
   useEffect(() => {
+    fetchExamples(6)
+      .then((e) => {
+        setExamples(e.examples);
+        setUnanswerable(e.unanswerable_example);
+      })
+      .catch(() => undefined);
     fetchStats().then(setStats).catch(() => setStats(null));
   }, []);
 
   // --- answer path ----------------------------------------------------------
+
+  /** Stop any answer currently being spoken and release its blob URL. */
+  const stopSpeaking = useCallback(() => {
+    audioRef.current?.pause();
+    audioRef.current = null;
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+    setSpeaking(false);
+  }, []);
+
+  /**
+   * Synthesise and play one answer.
+   *
+   * Speaks in the language the user chose, not always English. When they asked
+   * in Tamil the retrieval ran in English — that is an implementation detail of
+   * the encoder, not something they should hear.
+   */
+  const playAnswer = useCallback(
+    async (text: string) => {
+      stopSpeaking();
+      setSpeaking(true);
+      const url = await speak(text, language === "auto" ? "en-IN" : language);
+      if (!url) {
+        setSpeaking(false);
+        return;
+      }
+      audioUrlRef.current = url;
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => stopSpeaking();
+      audio.onerror = () => stopSpeaking();
+      try {
+        await audio.play();
+      } catch {
+        // Autoplay policy blocks playback until the page has been interacted
+        // with. Every path here follows a click or a spoken question, so this
+        // is rare; failing quietly beats an error the user cannot act on.
+        stopSpeaking();
+      }
+    },
+    [language, stopSpeaking],
+  );
+
+  useEffect(() => stopSpeaking, [stopSpeaking]);
+  useEffect(() => {
+    voiceOnRef.current = voiceOn;
+    if (!voiceOn) stopSpeaking();
+  }, [voiceOn, stopSpeaking]);
 
   const ask = useCallback(
     (text: string) => {
@@ -137,6 +194,8 @@ export default function Home() {
 
       setQuestion(q);
       setAnswer("");
+      answerRef.current = "";
+      stopSpeaking();
       setCitations([]);
       setResult(null);
       setError(null);
@@ -145,6 +204,7 @@ export default function Home() {
       abortRef.current = streamAnswer(q, language, {
         onToken: (delta) => {
           setPhase("answering");
+          answerRef.current += delta;
           setAnswer((a) => a + delta);
         },
         onFinal: (res) => {
@@ -166,6 +226,13 @@ export default function Home() {
           if (process.env.NODE_ENV === "development") {
             console.debug("wall-clock incl. network", wall.toFixed(1), "ms");
           }
+          // Speak it. Deliberately after the text has rendered: synthesis costs
+          // ~1.4 s, and blocking the answer on it would spend the time-to-first-
+          // token we optimised hardest for. The refusal text is spoken too — a
+          // system that only talks when it succeeds teaches you to distrust its
+          // silence.
+          const spoken = res.abstained ? res.answer : answerRef.current;
+          if (voiceOnRef.current && spoken.trim()) void playAnswer(spoken);
         },
         onError: (e) => {
           setError(e.message);
@@ -220,24 +287,29 @@ export default function Home() {
       setSpeculations(0);
       lastSpecRef.current = "";
 
-      void (async () => {
-        try {
-          const stt = new SarvamRealtimeStt({
-            languageCode: language,
-            // Ask Sarvam to translate rather than transcribe whenever the user
-            // is not already speaking English. The corpus is indexed in English
-            // and the query encoder cannot represent Indic scripts, so the
-            // transcript is the right place to cross the language boundary —
-            // and it is free, because Sarvam does it in the same call.
-            mode: language === "en-IN" ? "transcribe" : "translate",
-          });
-          await stt.connect(onTranscript);
-          sttRef.current = stt;
-        } catch (e) {
-          setError((e as Error).message);
-          setPhase("error");
-        }
-      })();
+      const stt = new SarvamRealtimeStt({
+        languageCode: language,
+        // Ask Sarvam to translate rather than transcribe whenever the user
+        // is not already speaking English. The corpus is indexed in English
+        // and the query encoder cannot represent Indic scripts, so the
+        // transcript is the right place to cross the language boundary —
+        // and it is free, because Sarvam does it in the same call.
+        mode: language === "en-IN" ? "transcribe" : "translate",
+      });
+      // Publish the client BEFORE awaiting the handshake. `onFrameProcessed`
+      // fires every ~32 ms from this moment, and until this ref is set those
+      // frames go nowhere. Assigning first lets them land in the client's
+      // pending buffer, which drains in order the instant the socket opens.
+      // Assigning after `await` was the bug that made short questions produce
+      // no answer at all.
+      sttRef.current = stt;
+
+      void stt.connect(onTranscript).catch((e: unknown) => {
+        setError(`Speech recognition failed: ${(e as Error).message}`);
+        setPhase("error");
+        sttRef.current?.close();
+        sttRef.current = null;
+      });
     },
     onFrameProcessed: (_p, frame: Float32Array) => {
       sttRef.current?.sendAudio(frame);
@@ -303,78 +375,130 @@ export default function Home() {
     <main>
       <header className="top">
         <div>
-          <h1>VoiceRAG</h1>
+          <div className="brand-mark">
+            <svg className="wave" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M1 15c2.5 0 2.5-3 5-3s2.5 3 5 3 2.5-3 5-3 2.5 3 5 3"
+                stroke="currentColor"
+                strokeWidth="1.9"
+                strokeLinecap="round"
+              />
+              <path
+                d="M1 20c2.5 0 2.5-3 5-3s2.5 3 5 3 2.5-3 5-3 2.5 3 5 3"
+                stroke="currentColor"
+                strokeWidth="1.9"
+                strokeLinecap="round"
+                opacity="0.45"
+              />
+              <circle cx="12" cy="6" r="3.1" stroke="currentColor" strokeWidth="1.9" />
+            </svg>
+            <span className="eyebrow">HH Goa 2026 · Task 2 · Voice RAG</span>
+          </div>
+          <h1>
+            Less noise.
+            <br />
+            <span className="thin">More signal.</span>
+          </h1>
           <p className="sub">
-            Speak a question — get an answer grounded in MS MARCO, with citations
-            and a receipt for every millisecond.
+            Ask out loud in eleven Indian languages. Every answer is grounded in
+            retrieved passages, cited, and comes with a receipt for every
+            millisecond it cost.
           </p>
         </div>
-        <select
-          value={language}
-          onChange={(e) => setLanguage(e.target.value)}
-          aria-label="Spoken language"
-        >
-          {LANGUAGES.map((l) => (
-            <option key={l.code} value={l.code}>
-              {l.label}
-            </option>
-          ))}
-        </select>
+        <div className="top-right">
+          <span className="eyebrow">Spoken language</span>
+          <select
+            value={language}
+            onChange={(e) => setLanguage(e.target.value)}
+            aria-label="Spoken language"
+          >
+            {LANGUAGES.map((l) => (
+              <option key={l.code} value={l.code}>
+                {l.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </header>
 
-      <section className="mic-row">
-        <button
-          className={`mic ${vad.listening ? "on" : ""} ${phase}`}
-          onClick={toggleMic}
-          disabled={vad.loading}
-          aria-pressed={vad.listening}
-        >
-          <span className="dot" />
-          {vad.loading
-            ? "Loading voice model…"
-            : vad.listening
-              ? "Listening — click to stop"
-              : "Click to speak"}
-        </button>
-
-        <PhasePill phase={phase} speculations={speculations} />
-      </section>
-
-      {/*
-        The typed path is not a fallback bolted on for accessibility -- it is the
-        only way this system is demonstrable when the microphone is unavailable,
-        which on a judge's managed browser or a phone with a reflexive "Block"
-        tap is a coin flip. Everything downstream of the transcript is identical,
-        so a typed question exercises retrieval, guardrails, grounding and the
-        HUD exactly as a spoken one does.
-      */}
-      <form
-        className="type-row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          submitTyped(typed);
-        }}
-      >
-        <input
-          type="text"
-          value={typed}
-          onChange={(e) => setTyped(e.target.value)}
-          placeholder="…or type a question"
-          aria-label="Type a question"
-          disabled={phase === "thinking" || phase === "answering"}
-        />
-        <button type="submit" disabled={!typed.trim()}>
-          Ask
-        </button>
-      </form>
-
-      <div className="chips">
-        {PRESETS.map((p) => (
-          <button key={p} className="chip" onClick={() => submitTyped(p)}>
-            {p}
+      <section className="ask">
+        <div className="mic-row">
+          <button
+            className={`mic ${vad.listening ? "on" : ""} ${phase}`}
+            onClick={toggleMic}
+            disabled={vad.loading}
+            aria-pressed={vad.listening}
+          >
+            <span className="dot" />
+            {vad.loading
+              ? "Loading voice model…"
+              : vad.listening
+                ? "Listening — click to stop"
+                : "Hold a question. Click to speak."}
           </button>
-        ))}
-      </div>
+
+          <PhasePill phase={phase} speculations={speculations} />
+        </div>
+
+        {/*
+          The typed path is not a fallback bolted on for accessibility -- it is
+          the only way this system is demonstrable when the microphone is
+          unavailable, which on a judge's managed browser or a phone with a
+          reflexive "Block" tap is a coin flip. Everything downstream of the
+          transcript is identical, so a typed question exercises retrieval,
+          guardrails, grounding and the HUD exactly as a spoken one does.
+        */}
+        <form
+          className="type-row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            submitTyped(typed);
+          }}
+        >
+          <input
+            type="text"
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder="…or type a question"
+            aria-label="Type a question"
+            disabled={phase === "thinking" || phase === "answering"}
+          />
+          <button type="submit" disabled={!typed.trim()}>
+            Ask
+          </button>
+        </form>
+
+        {/*
+          Sampled from the shard's own labelled queries, not invented. The most
+          common way this demo looks broken is a fair question the corpus was
+          never going to answer -- it indexes a fixed slice of MS MARCO, not the
+          web -- and the system then correctly declines, which from the outside
+          is indistinguishable from a bug.
+        */}
+        {examples.length > 0 && (
+          <>
+            <p className="chips-head eyebrow">
+              This corpus can answer questions like
+            </p>
+            <div className="chips">
+              {examples.map((p) => (
+                <button key={p} className="chip" onClick={() => submitTyped(p)}>
+                  {p}
+                </button>
+              ))}
+              {unanswerable && (
+                <button
+                  className="chip decline"
+                  onClick={() => submitTyped(unanswerable)}
+                  title="Labelled unanswerable in MS MARCO — watch it decline rather than guess"
+                >
+                  {unanswerable}
+                </button>
+              )}
+            </div>
+          </>
+        )}
+      </section>
 
       {partial && (
         <p className="partial">
@@ -398,6 +522,30 @@ export default function Home() {
             {answer}
             {phase === "answering" && <span className="caret" />}
           </p>
+          <div className="mic-row" style={{ marginTop: 12, gap: 16 }}>
+            {speaking && (
+              <span className="speaking-tag">
+                <span className="bars" aria-hidden="true">
+                  <i />
+                  <i />
+                  <i />
+                </span>
+                Speaking
+              </span>
+            )}
+            <button
+              className="mute-btn"
+              onClick={() => setVoiceOn((v) => !v)}
+              aria-pressed={!voiceOn}
+            >
+              {voiceOn ? "Mute spoken answers" : "Unmute spoken answers"}
+            </button>
+            {!speaking && voiceOn && answer.trim() && phase === "done" && (
+              <button className="mute-btn" onClick={() => void playAnswer(answer)}>
+                Replay
+              </button>
+            )}
+          </div>
         </article>
       )}
 

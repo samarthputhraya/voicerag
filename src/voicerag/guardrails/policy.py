@@ -310,9 +310,20 @@ class GuardrailPolicy:
                     "",
                 )
                 tail = f" — it {why}" if why else ""
+                # A deadline-truncated answer can leave a one- or two-character
+                # tail behind ("C"), which the sentence splitter then hands us as
+                # a "claim". Quoting that back reads as a bug rather than as a
+                # guardrail working, so name the count instead of the fragment.
+                stub = len(first.strip()) < 12 or len(first.split()) < 3
+                if stub:
+                    return (
+                        f"I drafted an answer but {n} statement(s) weren't supported by "
+                        "the retrieved passages, so I won't state them."
+                    )
+                shown = first if len(first) <= 160 else first[:157].rstrip() + "…"
                 return (
                     f"I drafted an answer but {n} statement(s) weren't supported by the "
-                    f"retrieved passages, so I won't state them. The first was “{first}”"
+                    f"retrieved passages, so I won't state them. The first was “{shown}”"
                     f"{tail}."
                 )
             return (
