@@ -152,8 +152,13 @@ def _load_embedder(directory: Path, manifest: dict[str, Any], settings: Settings
 def build_generators(settings: Settings | None = None) -> list[Generator]:
     """Instantiate the configured LLM backends, fastest first.
 
-    Groq leads because it is the fast path; Gemini follows because it is an
-    independent failure domain, which is the only kind of fallback worth having.
+    Groq leads because it is the fast path. OpenAI and Gemini follow because they
+    are independent failure domains, which is the only kind of fallback worth
+    having -- and because Groq's free tier caps at 8,000 tokens per minute, which
+    a RAG prompt carrying five passages exhausts in about four questions. That
+    ceiling is reached by a judge asking questions quickly, not just by a load
+    test, so the chain needs a real second link rather than a nominal one.
+
     An empty list is a valid outcome and means the deployment has no credentials
     -- reported by ``/healthz``, not raised here.
     """
@@ -169,6 +174,17 @@ def build_generators(settings: Settings | None = None) -> list[Generator]:
                 max_tokens=cfg.max_tokens,
                 temperature=cfg.temperature,
                 reasoning_effort=cfg.groq_reasoning_effort,
+            )
+        )
+    if cfg.openai_api_key is not None:
+        from ..generate.openai import OpenAIGenerator
+
+        generators.append(
+            OpenAIGenerator(
+                cfg.openai_api_key.get_secret_value(),
+                model=cfg.openai_model,
+                max_tokens=cfg.max_tokens,
+                temperature=cfg.temperature,
             )
         )
     if cfg.gemini_api_key is not None:

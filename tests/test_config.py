@@ -88,6 +88,7 @@ def test_public_dict_never_contains_a_secret() -> None:
     assert "hmac-secret" not in rendered
     assert settings.public_dict()["credentials"] == {
         "groq": True,
+        "openai": False,
         "gemini": False,
         "sarvam": True,
         "elevenlabs": False,

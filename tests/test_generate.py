@@ -33,6 +33,7 @@ from voicerag.harness.trace import Trace, traced
 from voicerag.generate.base import DEFAULT_MAX_TOKENS, GenerationResult, Generator
 from voicerag.generate.gemini import GeminiGenerator
 from voicerag.generate.groq import GroqGenerator
+from voicerag.generate.openai import OpenAIGenerator
 from voicerag.generate.prompt import (
     ABSTAIN_TOKEN,
     SYSTEM_PROMPT,
@@ -473,6 +474,62 @@ async def test_warm_never_raises_when_the_endpoint_is_unreachable():
     gen = GroqGenerator("k", transport=httpx.MockTransport(boom))
     assert await gen.warm() is False
     await gen.aclose()
+
+
+# --- openai -------------------------------------------------------------------
+#
+# The OpenAI client is a subclass of the Groq one, because the two speak the same
+# wire protocol. These tests pin the three things that must differ -- anything
+# shared is already covered above and re-testing it would only assert that
+# inheritance works.
+
+
+async def test_openai_posts_to_openai_not_groq():
+    record: dict[str, Any] = {}
+    gen = OpenAIGenerator("k", client=sse_client([b"data: [DONE]\n\n"], record=record))
+    await gen.complete("s", "u")
+    assert record["url"].startswith("https://api.openai.com/v1/"), record["url"]
+
+
+async def test_openai_sends_max_completion_tokens_not_max_tokens():
+    """Newer OpenAI models reject `max_tokens` outright; Groq requires it."""
+    record: dict[str, Any] = {}
+    gen = OpenAIGenerator("k", max_tokens=42, client=sse_client([b"data: [DONE]\n\n"], record=record))
+    await gen.complete("s", "u")
+    assert record["body"]["max_completion_tokens"] == 42
+    assert "max_tokens" not in record["body"]
+
+
+async def test_openai_never_sends_reasoning_effort():
+    """`reasoning_effort` is a gpt-oss parameter. To OpenAI it is a 400."""
+    record: dict[str, Any] = {}
+    gen = OpenAIGenerator("k", client=sse_client([b"data: [DONE]\n\n"], record=record))
+    await gen.complete("s", "u")
+    assert "reasoning_effort" not in record["body"]
+
+
+def test_openai_and_groq_are_separate_circuit_breaker_identities():
+    """Shared `name` would let one provider's failures open the other's breaker,
+    which would defeat the entire point of having a fallback."""
+    assert OpenAIGenerator.name != GroqGenerator.name
+    assert OpenAIGenerator("k").name == "openai"
+
+
+async def test_router_fails_over_from_groq_to_openai():
+    """The reason this provider exists: Groq's 8k tokens/min ceiling should
+    degrade the demo to a slower answer, not to no answer."""
+    def rate_limited(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, text="rate limit exceeded")
+
+    groq = GroqGenerator("k", client=httpx.AsyncClient(transport=httpx.MockTransport(rate_limited)))
+    openai = OpenAIGenerator("k", client=sse_client([
+        b'data: {"choices":[{"index":0,"delta":{"content":"fallback answer"}}]}\n\n',
+        b"data: [DONE]\n\n",
+    ]))
+    router = GenerationRouter([groq, openai])
+    result = await router.complete("s", "u")
+    assert result.text == "fallback answer"
+    assert result.provider == "openai"
 
 
 # --- gemini -------------------------------------------------------------------

@@ -343,6 +343,21 @@ def _register_routes(application: FastAPI, state: AppState, cfg: Settings) -> No
         removing it would only hide the reason.
         """
         ready = state.ready
+        # `Settings.embedder_spec` and `chunking_strategy` are *fallbacks*, used
+        # only when the manifest does not name one. Once an index is loaded the
+        # manifest wins, so reporting the settings values here would tell a
+        # reader the served index was built with something it was not. Report
+        # what is actually loaded, and say where each value came from.
+        config = cfg.public_dict()
+        if state.bundle is not None:
+            config = {
+                **config,
+                "embedder_spec": state.bundle.embedder_spec,
+                "chunking_strategy": state.bundle.strategy,
+                "config_source": "index manifest",
+            }
+        else:
+            config = {**config, "config_source": "settings fallback (no index loaded)"}
         return HealthResponse(
             status="ok" if ready else "degraded",
             index_loaded=ready,
@@ -351,7 +366,7 @@ def _register_routes(application: FastAPI, state: AppState, cfg: Settings) -> No
             circuits=state.circuits(),
             uptime_s=round(time.time() - state.started_at, 3),
             warmup=state.warmup_ms,
-            config=cfg.public_dict(),
+            config=config,
         )
 
     @application.get("/stats", response_model=StatsResponse, tags=["meta"])

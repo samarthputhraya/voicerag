@@ -331,6 +331,7 @@ class TestOperational:
         assert body["warmup"], "startup must have warmed the pipeline"
         assert body["config"]["credentials"] == {
             "groq": False,
+            "openai": False,
             "gemini": False,
             "sarvam": False,
             "elevenlabs": False,
@@ -435,6 +436,59 @@ class TestSttToken:
         decoded = verify_capability(token, settings)
         assert decoded == cap
         assert decoded.expires_in > 0
+
+
+# --- WS /stt/stream -----------------------------------------------------------
+#
+# The relay exists because Sarvam accepts no `token` query parameter and mints no
+# ephemeral credential, so the account key cannot leave this process. These tests
+# pin that property and the URL construction; the byte pump itself is exercised
+# against the live vendor rather than a mock, because a mock of a protocol we do
+# not control proves nothing about the protocol.
+
+
+class TestSttRelay:
+    def test_refuses_cleanly_when_no_sarvam_key_is_configured(self, corpus: Any) -> None:
+        client, _ = make_client(corpus, ScriptedGenerator(ANSWER))
+        with client, client.websocket_connect("/stt/stream") as ws:
+            frame = ws.receive_json()
+        assert frame["event"] == "relay.error"
+        assert frame["code"] == "stt_unconfigured"
+        assert frame["is_fatal"] is True
+
+    def test_upstream_url_carries_the_server_chosen_model_and_audio_geometry(self) -> None:
+        from voicerag.api.stt_relay import _upstream_url
+
+        settings = make_settings(sarvam_api_key="sk-secret", stt_language="en-IN")
+        url = _upstream_url(settings, {})
+        assert url.startswith("wss://api.sarvam.ai/speech-to-text-realtime/ws?")
+        assert "model=saaras" in url
+        # Pinned server-side: a client that declares a sample rate its audio does
+        # not have gets a confidently wrong transcript, which is worse than an error.
+        assert "encoding=linear16" in url
+        assert "sample_rate=16000" in url
+        # The account key is a header on the upgrade, never a query parameter.
+        assert "sk-secret" not in url
+
+    def test_client_may_override_only_whitelisted_parameters(self) -> None:
+        from voicerag.api.stt_relay import _upstream_url
+
+        settings = make_settings(sarvam_api_key="sk-secret")
+        url = _upstream_url(
+            settings,
+            {
+                "language_code": "hi-IN",
+                "stream_type": "balanced",
+                "model": "attacker-chosen-model",
+                "sample_rate": "8000",
+            },
+        )
+        assert "language_code=hi-IN" in url
+        assert "stream_type=balanced" in url
+        # Not whitelisted: a client must not be able to redirect us to another
+        # model, or contradict the audio geometry the worklet actually produces.
+        assert "attacker-chosen-model" not in url
+        assert "sample_rate=16000" in url
 
     def test_tampered_capability_is_rejected(self) -> None:
         settings = make_settings(stt_signing_key="test-signing-key")

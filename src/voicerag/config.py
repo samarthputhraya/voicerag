@@ -98,6 +98,7 @@ class Settings(BaseSettings):
 
     sarvam_api_key: SecretStr | None = None
     elevenlabs_api_key: SecretStr | None = None
+    openai_api_key: SecretStr | None = None
     groq_api_key: SecretStr | None = None
     gemini_api_key: SecretStr | None = None
     stt_signing_key: SecretStr | None = Field(
@@ -115,6 +116,7 @@ class Settings(BaseSettings):
     groq_model: str = "openai/gpt-oss-20b"
     groq_reasoning_effort: str | None = "low"
     gemini_model: str = "gemini-2.5-flash-lite"
+    openai_model: str = "gpt-4o-mini"
     sarvam_model: str = "saaras:v3-realtime"
     sarvam_batch_model: str = "saaras:v3"
     elevenlabs_model: str = "scribe_v2_realtime"
@@ -345,6 +347,7 @@ class Settings(BaseSettings):
             },
             "credentials": {
                 "groq": self.groq_api_key is not None,
+                "openai": self.openai_api_key is not None,
                 "gemini": self.gemini_api_key is not None,
                 "sarvam": self.sarvam_api_key is not None,
                 "elevenlabs": self.elevenlabs_api_key is not None,
