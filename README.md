@@ -35,11 +35,17 @@ everything else beside it, unmassaged, so nothing is hidden by the framing:
 |---|---|---|
 | **Pipeline latency** ← *the 200 ms claim* | Transcript in → **final** answer token out. Guardrails, embedding, hybrid retrieval, fusion, abstention, prompt build, full generation. | **< 200 ms** |
 | Time to first token | Transcript in → first token. Reported because it is what a user perceives. | reported |
-| Speech latency | End of speech (VAD endpoint) → final transcript. Sarvam, measured client-side. | reported |
-| Client network | Browser ↔ API round trip. Geography, not engineering. | reported |
-| Wall clock | End of speech → last token painted. What a human actually experiences. | reported |
+| Pipeline incl. abstentions | The same, over *every* query including the ones we refuse. A system that abstains often would otherwise flatter itself by reporting only the answered subset. | reported |
+| Cold | The warmup runs, excluded from the percentiles above and published separately rather than discarded. | reported |
 
-`eval/latency.py` emits all five, per stage, at P50/P70/P90/P100.
+`eval/latency.py` emits those four series, plus a per-stage breakdown, at
+P50/P70/P90/P95/P99/P100.
+
+Speech latency (VAD endpoint → final transcript) and browser↔API round trip are
+**client-side quantities this harness cannot observe**. `scripts/bench_latency.py`
+accepts them via `--stt-ms` / `--network-ms` for a combined wall-clock figure, but
+nothing measures them automatically, so they are absent unless a human supplies
+them. They are called out here rather than quietly folded into a total.
 
 Percentiles use the **nearest-rank** method (`ceil(p/100 × n)`), stated here
 because P70 is unusual enough that the interpolation choice materially moves the
@@ -47,7 +53,62 @@ number. The frontend HUD uses the identical definition, so the live demo and the
 report can never disagree.
 
 <!-- BENCHMARK_TABLE_START -->
-*Populated by `python scripts/bench_latency.py`.*
+Measured on the real index — **197,511 chunks from 196,436 MSMARCO-XI passages**,
+`recursive` chunking, `static:minishlab/potion-base-8M` — over **200 warm runs
+across 2,000 distinct queries**. Reproduce with:
+
+```bash
+python scripts/bench_latency.py --index data/index --iterations 200 --force-simulated
+```
+
+| Series | n | mean | P50 | P70 | P90 | P95 | P100 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **Pipeline (answered)** — transcript in → final token out | 67 | 142.2 | **141.6** | **142.9** | 145.5 | 148.0 | **157.3** |
+| Pipeline incl. abstentions | 200 | 53.3 | 8.8 | 138.9 | 142.9 | 144.2 | 157.3 |
+| Time to first token | 67 | 128.1 | 127.4 | 128.8 | 131.1 | 134.0 | 143.3 |
+| Cold (warmup, excluded above) | 5 | 63.2 | 14.3 | 141.5 | 144.1 | 144.1 | 144.1 |
+
+Per stage (warm, answered):
+
+| Stage | P50 | P70 | P90 | P100 |
+|---|---:|---:|---:|---:|
+| generate.total *(simulated — see below)* | 134.0 | 134.0 | 134.1 | 149.6 |
+| generate.ttft *(simulated)* | 120.0 | 120.0 | 120.0 | 128.4 |
+| retrieve | 6.8 | 8.2 | 10.1 | 22.6 |
+| embed | **0.2** | 0.3 | 0.4 | **1.0** |
+| guard.abstention | 0.1 | 0.1 | 0.2 | 0.4 |
+| guard.input | 0.1 | 0.1 | 0.1 | 0.2 |
+| prompt | 0.1 | 0.1 | 0.1 | 0.1 |
+
+**Verdict: P100 = 157.3 ms < 200 ms.** P50 141.6, P70 142.9.
+
+The retrieval path — everything the brief actually scopes, i.e. guardrails +
+embed + hybrid retrieve + fusion + abstention + prompt — is **7.3 ms at P50** and
+**23.5 ms at P100**. The chunking strategy was chosen by the ablation below, not
+by preference: `recursive` beat `sentence_window` on recall *and* turned out
+2.5× faster to search, because it produces 197k chunks instead of 623k.
+
+> ### What is and is not measured here
+>
+> **Real measurements:** everything on the retrieval path — input guard, embed,
+> hybrid retrieve, fusion, abstention, prompt build, grounding. That path is
+> **17.5 ms at P50** and **36.5 ms at P100** on 622k chunks.
+>
+> **Modelled:** generation. The decode timing above comes from a vendor-published
+> profile for `openai/gpt-oss-20b`, not from calling Groq during the run. The
+> harness stamps every such artifact `"generation": "simulated"` so the two can
+> never be confused.
+>
+> **What a real Groq call actually costs from India:** ~450–900 ms end-to-end,
+> against ~14 ms of Groq-side compute. The rest is trans-Pacific RTT and queueing
+> — geography, not engineering, and not something a faster index can fix. The
+> live demo therefore runs with `BUDGET_TOTAL_MS=2500`; at 200 ms the deadline
+> correctly truncates a real answer after one word, which is honest but useless.
+> Measured voice-to-answer over the full stack (Sarvam STT → retrieval → Groq →
+> grounded answer with citations) is **~1.1 s after end of speech**.
+>
+> Both numbers are published because only publishing the second would understate
+> the engineering, and only publishing the first would overstate the product.
 <!-- BENCHMARK_TABLE_END -->
 
 ---
@@ -63,40 +124,64 @@ static model — a token-embedding lookup, no transformer forward pass, no torch
 A hosted embedding API would cost 100–300 ms of round trip; this costs
 microseconds. The vector index is in-process faiss HNSW, not a hosted vector DB.
 
-Measured on 2 vCPU, 200k vectors × dim 256, `efConstruction=80`:
+The measured cost of the retrieval path on the built index — real numbers from
+`scripts/bench_latency.py`, not estimates — is in the benchmark table above.
+`embed` is the static model2vec encode; `retrieve` is dense HNSW and BM25 run
+concurrently and fused.
 
-| `efSearch` | P50 | P70 | P100 |
-|---:|---:|---:|---:|
-| 32 | 0.630 ms | 0.679 ms | 1.331 ms |
-| 64 | 1.126 ms | 1.179 ms | 2.146 ms |
-| 128 | 2.129 ms | 2.209 ms | 2.958 ms |
+The budget belongs to the LLM, so that is where we spent the optimisation effort.
 
-Retrieval is **effectively free**. The budget belongs to the LLM, so that is
-where we spent the optimisation effort.
+> **On the embedder choice.** The offline fallback is a hashing-LSA projection
+> that needs no download, which keeps the test suite and `scripts/smoke.py`
+> runnable with no network. It is *not* what you want at serve time: measured on
+> this corpus, `lsa:256` costs **20.3 ms P50 / 53.2 ms P100** per query encode,
+> against **0.063 ms P50 / 0.63 ms P100** for `static:minishlab/potion-base-8M` —
+> roughly 320× — and the LSA tail alone was enough to push retrieval past its
+> slice of the budget. Build the served index with `--embedder static:...`.
 
 ### 2. Speculative retrieval on partial transcripts
 
 Sarvam's realtime WebSocket emits partial transcripts while you are still
-talking. On every partial that gains ≥3 tokens, we fire a **cancellable**
-embed + ANN search keyed by a hash of the partial. When the final transcript
-arrives, if it is within cosine 0.98 of the last speculated partial, we reuse the
-cached result and skip retrieval entirely.
+talking. On every partial that gains ≥3 tokens, the browser fires
+`POST /speculate`, which runs embed + hybrid search in the background and stores
+the result in a small TTL cache keyed by the **normalised transcript text**. When
+the final transcript arrives, an exact key match reuses that result and skips
+retrieval entirely.
 
-Most short questions are fully determined before the endpoint fires, so
-post-endpoint retrieval cost collapses toward zero at P50 — the work happened
-during the silence at the end of your sentence. Hit rate and milliseconds saved
-are reported per request in the API response and shown live in the HUD.
+Two honest caveats. The match is exact-on-normalised-text, **not** a similarity
+threshold — so it hits when the last partial already equalled the final
+transcript, which for short questions is common but is not the same as "close
+enough". And a similarity-based driver (cosine 0.98 against the last speculated
+partial) *does* exist in `stt/speculative.py`, but the browser path does not use
+it; it is exercised by the tests only. Hit rate and milliseconds saved are
+reported per request in the API response and shown live in the HUD.
 
-### 3. The audio never touches our server
+### 3. Audio relays through our server, and that is a deliberate concession
 
-Sarvam is hosted in India; Groq is hosted in the US. Rather than compromise, we
-split the path. The **browser** streams PCM directly to Sarvam over WebSocket
-(India → India, ~15–40 ms), and only the finished transcript — a few dozen
-bytes — crosses to our API, which is **co-located with Groq in US-West**. Each
-leg is short even though the endpoints are twelve time zones apart.
+This section previously claimed the browser streamed PCM straight to Sarvam,
+keeping audio India→India while only the transcript crossed the Pacific. The
+latency argument was sound. The premise underneath it was wrong, and finding that
+out changed the architecture:
 
-The Sarvam key never reaches the browser: `POST /stt/token` mints a short-lived
-credential server-side.
+* Sarvam's realtime endpoint accepts **no `token` query parameter**. Auth is an
+  `api-subscription-key` header, or an `api-subscription-key.<key>` WebSocket
+  subprotocol for browsers.
+* Sarvam publishes **no ephemeral-token endpoint**. There is nothing short-lived
+  to mint.
+
+So the only credential that authenticates a browser to Sarvam is the permanent
+account key — in the bundle, in devtools, unexpiring. The old code sent a
+capability our own server had signed, which Sarvam ignored, so the socket died
+unauthenticated and the voice path never worked.
+
+`WS /stt/stream` is the fix: a server-side relay that speaks Sarvam's protocol
+verbatim in both directions and keeps the key server-side. The cost is one extra
+hop per audio frame. Running the API next to the browser — the demo case — that
+hop is loopback and **measured at 8 ms to connect**. Deployed far from the user
+it is a real tax, and we pay it rather than publish the account key.
+
+`POST /stt/token` remains for ElevenLabs and for deployments that set
+`SARVAM_TOKEN_URL`, where a vendor genuinely does mint a browser credential.
 
 > **The single largest latency win in this project is not in the model layer.**
 > The standard browser VAD library waits **1400 ms** of silence by default before
@@ -125,8 +210,51 @@ Reciprocal Rank Fusion. Component scores and ranks survive fusion, because the
 abstention logic needs them (see below).
 
 <!-- ABLATION_TABLE_START -->
-*Populated by `python scripts/run_ablation.py`. Reports Recall@1/5/10, MRR@10,
-nDCG@10, chunk count, index build time and mean query latency per strategy.*
+Run over **19,878 deduplicated passages / 400 queries** from the real shard, with
+the embedder held constant so the table isolates chunking. Full output in
+[`reports/ablation.md`](reports/ablation.md). Reproduce with:
+
+```bash
+python scripts/run_ablation.py --rows data/raw/rows-20000.jsonl.gz --limit 2000 \
+    --embedder static:minishlab/potion-base-8M --max-queries 400
+```
+
+| Strategy | Chunks | R@1 | R@5 | R@10 | MRR@10 | nDCG@10 | Query p50 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **recursive** ← *serving* | 19,998 | **0.2455** | 0.7228 | **0.9070** | **0.4572** | **0.5628** | 1.13 ms |
+| metadata | 20,062 | 0.2430 | 0.7228 | 0.9024 | 0.4542 | 0.5590 | 1.22 ms |
+| contextual | 19,998 | 0.2280 | 0.7103 | 0.8987 | 0.4526 | 0.5567 | 1.18 ms |
+| `fixed` *(control)* | 20,062 | 0.2405 | 0.7203 | 0.9024 | 0.4512 | 0.5566 | 1.21 ms |
+| semantic | 32,933 | 0.2201 | 0.7045 | 0.8699 | 0.4387 | 0.5372 | 1.70 ms |
+| sentence_window | 63,475 | 0.2276 | 0.6757 | 0.8023 | 0.4298 | 0.5133 | 1.98 ms |
+
+**This table changed the build.** The index originally shipped with
+`sentence_window`, on the reasoning that small units embed sharply — the argument
+still written in the strategy table above. Measured against real relevance
+judgements it is the **worst** of the six: −10.5 points of R@10 against
+`recursive`, at 3× the chunk count and 1.75× the query latency. The ablation
+existed to be believed, so the served index was rebuilt on `recursive`.
+
+The honest caveat: this ran at 2,000 rows, not the full 20,000, and `fixed` — the
+naive control — lands within 0.5 points of the winner on R@10. The spread across
+strategies is real but narrow, and R@1 in particular is within noise. What the
+table rules out confidently is `sentence_window` at this chunk geometry.
+
+Fusion, with chunking held at the serving strategy:
+
+| Fusion | R@10 | MRR@10 | nDCG@10 |
+|---|---:|---:|---:|
+| minmax | 0.8111 | 0.4407 | **0.5234** |
+| zscore | 0.8111 | 0.4408 | 0.5232 |
+| `rrf` ← *configured* | 0.8023 | 0.4314 | 0.5145 |
+| sparse only *(control)* | 0.7628 | 0.4207 | 0.4972 |
+| dense only *(control)* | 0.7511 | 0.3991 | 0.4794 |
+
+Hybrid earns its complexity: RRF beats both single-retriever controls by 2–4
+points of nDCG. But `minmax` and `zscore` both beat RRF, so the configured
+default is **not** the best-measured option — recorded here rather than quietly
+switched, because the fusion axis was measured on `sentence_window` chunking and
+needs re-running against `recursive` before the default moves.
 <!-- ABLATION_TABLE_END -->
 
 ---
@@ -161,7 +289,10 @@ feature.
 **Grounding verification** (concurrent with streaming) — sentence-level claim
 extraction, lexical entailment against retrieved chunks, exact checking of
 numbers and dates (the things that hallucinate most and are cheapest to verify),
-and citation validation. Runs *alongside* generation, so it costs no wall-clock.
+and citation validation. Runs *interleaved* with generation — each sentence is
+verified as it completes, rather than after the last token — so the cost is
+overlapped, not eliminated. It is small but real: **~0.16 ms P50** for 3 claims
+against 3 passages. The shape is the point; the saving is a bonus.
 
 ---
 
@@ -264,7 +395,7 @@ which keeps the whole suite and a full ablation runnable anywhere.
 ```
 src/voicerag/
   chunking/     six strategies + registry, offset-preserving
-  embed/        static (model2vec) · lsa (zero-download) · onnx, all pluggable
+  embed/        static (model2vec) · lsa (zero-download), both pluggable
   index/        dense HNSW · BM25 · RRF hybrid · chunk store
   guardrails/   input · abstention · grounding · policy
   harness/      trace · deadline · retry · circuit breaker · fallback

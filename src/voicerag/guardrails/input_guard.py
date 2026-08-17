@@ -25,8 +25,11 @@ pretend to be one; see :data:`_STRONG_PROFANITY`.
 
 A model-based injection detector (``protectai/deberta-v3-base-prompt-injection-v2``
 exported to ONNX) is the production upgrade. It is *not* the default because it
-costs ~11 ms at seq_len 64 on this box (measured, ``bench_guardrails.py``) --
-5.5 % of the entire latency budget to catch obfuscations the heuristic misses.
+costs an estimated ~11 ms at seq_len 64 -- roughly 5.5 % of the entire latency
+budget to catch obfuscations the heuristic misses. That figure is a projection
+from published benchmarks for this checkpoint, **not** a measurement taken here:
+no such detector is bundled and no script in this repo produces the number. The
+heuristic path, by contrast, is measured in-suite at ~47 us P50.
 The seam is :attr:`InputGuardConfig.model_detector`: supply any
 ``Callable[[str], float]`` and its score is fused with the heuristic. Nothing in
 this module imports a model, so the import cost stays at zero.
