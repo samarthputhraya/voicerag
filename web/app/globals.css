@@ -578,7 +578,19 @@ select:focus-visible {
   font-weight: 600;
 }
 
+.guard-card .n {
+  margin-top: 6px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink-3);
+}
+
+.guard-card.pass { border-left: 3px solid var(--ok); }
 .guard-card.pass .v { color: var(--ok); }
+/* A refusal is the system working. Amber, never red. */
+.guard-card.neutral { border-left: 3px solid var(--sun); }
+.guard-card.neutral .v { color: var(--sun); }
+.guard-card.fail { border-left: 3px solid var(--bad); }
 .guard-card.fail .v { color: var(--bad); }
 
 /* --- latency hud --- */

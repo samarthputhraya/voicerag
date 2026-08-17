@@ -354,7 +354,10 @@ export default function Home() {
       const q = text.trim();
       if (!q) return;
       setTyped("");
-      setPartial(q);
+      // Not setPartial: that renders under "hearing", which is a lie for a
+      // typed question and made the UI look like it had misheard something
+      // nobody said. `ask` sets the "asked" line itself.
+      setPartial("");
       setPhase("thinking");
       void ask(q);
     },
@@ -619,50 +622,65 @@ function GuardrailPanel({
 }: {
   report: NonNullable<RagResponse["guardrails"]>;
 }) {
-  const grounding =
-    report.grounding_score !== undefined
-      ? `${(report.grounding_score * 100).toFixed(0)}%`
-      : "—";
+  // Grounding only means something once an answer exists to ground. Showing
+  // "Grounding 0%" beside a refusal reads as a failed check when in fact
+  // nothing was ever asserted, which is the guardrail succeeding.
+  const scored = !report.abstained && report.grounding_score !== undefined;
+  const grounding = scored
+    ? `${((report.grounding_score ?? 0) * 100).toFixed(0)}%`
+    : "not applicable";
+
   return (
-    <section className="guards">
+    <section className="guard">
       <h2>Guardrails</h2>
-      <div className="grow">
-        <Check ok={report.input_allowed} label="Input accepted" note={report.input_reason} />
-        <Check
-          ok={!report.abstained}
-          label={report.abstained ? "Abstained" : "Answered"}
-          note={report.abstain_reason}
-          neutral={report.abstained}
+      <div className="guard-grid">
+        <GuardCard
+          k="Input"
+          v={report.input_allowed ? "Accepted" : "Blocked"}
+          note={report.input_reason}
+          state={report.input_allowed ? "pass" : "fail"}
         />
-        <Check
-          ok={report.grounded !== false}
-          label={`Grounding ${grounding}`}
+        <GuardCard
+          k="Answer"
+          v={report.abstained ? "Declined" : "Asserted"}
+          note={report.abstain_reason}
+          // Declining is the system working, not failing. Colouring it red
+          // would teach a viewer to read a correct refusal as a bug.
+          state={report.abstained ? "neutral" : "pass"}
+        />
+        <GuardCard
+          k="Grounding"
+          v={grounding}
           note={
             report.unsupported_claims?.length
-              ? `${report.unsupported_claims.length} unsupported claim(s)`
-              : null
+              ? `${report.unsupported_claims.length} unsupported claim(s) withheld`
+              : scored
+                ? "every claim traced to a passage"
+                : "no claim was asserted"
           }
+          state={!scored ? "neutral" : report.grounded === false ? "fail" : "pass"}
         />
       </div>
     </section>
   );
 }
 
-function Check({
-  ok,
-  label,
+function GuardCard({
+  k,
+  v,
   note,
-  neutral = false,
+  state,
 }: {
-  ok: boolean;
-  label: string;
+  k: string;
+  v: string;
   note?: string | null;
-  neutral?: boolean;
+  state: "pass" | "fail" | "neutral";
 }) {
   return (
-    <div className={`chk ${neutral ? "neutral" : ok ? "ok" : "bad"}`}>
-      <strong>{label}</strong>
-      {note && <em>{note}</em>}
+    <div className={`guard-card ${state}`}>
+      <div className="k">{k}</div>
+      <div className="v">{v}</div>
+      {note && <div className="n">{note}</div>}
     </div>
   );
 }

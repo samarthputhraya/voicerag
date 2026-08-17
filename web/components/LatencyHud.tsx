@@ -215,7 +215,13 @@ export default function LatencyHud({
         <Stat label="P50" value={p50} budget={budgetMs} />
         <Stat label="P70" value={p70} budget={budgetMs} />
         <Stat label="P100" value={p100} budget={budgetMs} />
-        <Stat label="TTFT" value={ttftMs ?? 0} budget={budgetMs} dim={ttftMs === null} />
+        {/*
+          TTFT is dominated by the hosted LLM round trip, so scoring it against
+          the retrieval budget marks a healthy 390 ms red for missing a bar it
+          was never measured against. Reported, never judged — the same rule the
+          generation row follows.
+        */}
+        <Stat label="TTFT" value={ttftMs ?? 0} budget={Infinity} dim={ttftMs === null} />
         <div className="n">n = {history.length}</div>
       </div>
 

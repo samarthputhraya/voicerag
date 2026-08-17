@@ -85,19 +85,30 @@ def make_hits(rng: np.random.Generator, *, answerable: bool, k: int = 10) -> lis
     The two classes differ the way real ones do: an answerable query produces a
     peaked score curve with dense/sparse agreement near the top, while an
     unanswerable one produces a nearly flat curve found by one retriever only.
-    The absolute cosine scale is deliberately *low* (top hit around 0.28 rather
-    than 0.7) because that is what the corpus-fit LSA embedder in this repo
-    actually produces -- and it is exactly the situation where the prior
-    thresholds are wrong and calibration has to earn its place.
+
+    **The scales here are measured, not invented.** An earlier version generated
+    a top cosine around 0.28, described as "what the corpus-fit LSA embedder in
+    this repo actually produces". The shipped index does not use LSA -- it uses
+    ``static:minishlab/potion-base-8M`` -- and measured over 125 in-corpus and 8
+    out-of-corpus queries against 956,128 chunks, the real medians are
+    ``dense_max`` 0.7276 in-corpus against 0.4739 out, with agreement 0.90
+    against 0.20.
+
+    That gap mattered. The fixture asserted roughly three times the class
+    separation that exists on the real index, at a cosine scale less than half
+    of it, so a prior threshold tuned against reality looked broken here and a
+    threshold tuned against this fixture was inert in production. A test fixture
+    that disagrees with the system it tests will eventually be believed over the
+    system.
     """
     if answerable:
-        top = float(rng.normal(0.28, 0.05))
+        top = float(rng.normal(0.73, 0.10))
         decay = float(rng.uniform(0.45, 0.70))
-        p_both = 0.65
+        p_both = 0.84
     else:
-        top = float(rng.normal(0.16, 0.05))
+        top = float(rng.normal(0.47, 0.10))
         decay = float(rng.uniform(0.93, 0.99))
-        p_both = 0.15
+        p_both = 0.20
 
     hits: list[FakeHit] = []
     for i in range(k):
@@ -481,10 +492,18 @@ def test_calibration_measurably_improves_f1(capsys):
     The synthetic set mimics the corpus-fit LSA embedder actually used here,
     whose cosines sit far below the 0.30 prior floor. The priors fail in the
     direction that is easy to miss -- they are *cautious*, refusing only when
-    several equally weighted votes agree, so they catch under half of the
-    genuinely unanswerable queries while almost never refusing a good one. The
-    fit learns that ``dense_max`` and ``agreement`` deserve most of the weight
-    and roughly doubles recall for a couple of points of precision.
+    several equally weighted votes agree, so they leave recall on the table
+    while almost never refusing a good one. The fit learns that ``dense_max``
+    and ``agreement`` deserve most of the weight and recovers that recall for a
+    couple of points of precision.
+
+    The headroom is deliberately smaller than it once was. ``PRIOR_RULES`` was
+    recalibrated against the served index -- dropping two rules that carried
+    zero or inverted signal, and moving ``dense_max`` off a threshold it could
+    never reach -- so the priors now start far closer to the fitted model. A
+    shrinking gap here is the priors improving, not calibration regressing, and
+    this test asserts the *direction and shape* of the gain rather than a
+    magnitude tuned to a worse starting point.
     """
     pos, neg = labelled_set(n=200, seed=0)
     gate = AbstentionGate()
@@ -504,8 +523,13 @@ def test_calibration_measurably_improves_f1(capsys):
     assert result.after["f1"] > 0.8
     assert gate.calibrated and gate.model is result.model
     # The gain must come from catching more unanswerable queries...
-    assert result.after["recall"] > result.before["recall"] + 0.2
-    # ...not from refusing indiscriminately.
+    assert result.after["recall"] > result.before["recall"], (
+        "calibration must recover recall the cautious priors leave on the table"
+    )
+    # ...not from refusing indiscriminately. This is the assertion that matters:
+    # a gate can always reach recall 1.0 by abstaining on everything, and the
+    # measured failure mode on real MS MARCO labels was exactly that -- F1 0.777
+    # bought with a 91% false-abstention rate.
     assert result.after["false_abstention_rate"] < 0.10
     # The fit must agree with the module's stated reading of the signals.
     coef = result.model.coefficients()

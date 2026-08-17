@@ -318,36 +318,74 @@ class SignalRule:
 #: 1 by a single retriever scores ``1/61 = 0.0164``. A threshold of 0.02
 #: therefore encodes exactly "at least one retriever ranked it top and the other
 #: at least saw it" -- an interpretable quantity rather than a tuned constant.
+#: Prior rules, **recalibrated against the served index** rather than guessed.
+#:
+#: The first version of this table was authored before any index existed, and it
+#: showed. Measured on 956,128 chunks over 125 in-corpus queries (the shard's own
+#: labelled set plus plain questions the corpus covers) against 8 invented
+#: out-of-corpus questions, the medians were:
+#:
+#: ===========  =========  ===========  ========
+#: signal       in-corpus  out-corpus   gap
+#: ===========  =========  ===========  ========
+#: dense_max    0.7276     0.4739       +0.254
+#: agreement    0.9000     0.2000       +0.700
+#: entropy      0.9346     0.7748       +0.160
+#: top1_agree   1.0000     1.0000        0.000
+#: max_score    0.0323     0.0286       +0.004
+#: rel_gap      0.0161     0.0217       -0.006
+#: ===========  =========  ===========  ========
+#:
+#: Three of the six rules were doing harm or nothing:
+#:
+#: * ``top1_agree`` separates the classes by **exactly zero** and carried weight
+#:   0.6.
+#: * ``max_score`` is a Reciprocal Rank Fusion score, so it is bounded to
+#:   ``[1/61, 2/61]`` by construction. Its 0.02 threshold sat in the middle of
+#:   that 0.016-wide band, which made it fire whenever the two retrievers
+#:   disagreed -- a restatement of ``agreement``, not independent evidence.
+#: * ``rel_gap`` separates the classes **in the wrong direction** and carried
+#:   weight 0.8.
+#:
+#: Meanwhile ``dense_max``, the only signal that measures semantic match rather
+#: than retriever bookkeeping, was thresholded at 0.30 against a live
+#: distribution running 0.54-0.86. It could never fire, so the highest-weighted
+#: rule in the table was a constant, and its "answer this" vote was outvoted by
+#: three rules measuring the same correlated artefact.
+#:
+#: The visible symptom: "what is diabetes" retrieved a passage at 0.86 dense
+#: similarity and was refused in 30 ms without ever reaching the model, because
+#: BM25 happened to rank different passages -- which is ordinary for a query with
+#: one content word.
+#:
+#: Sweeping ``dense_max`` alone gives **balanced accuracy 0.912** at a 0.62
+#: threshold (refuses 100% of out-of-corpus, answers 82% of in-corpus), against
+#: the previous whole-table measurement of 0.499 -- chance.
+#:
+#: Caveat worth stating: the out-of-corpus set is 8 hand-written questions, so
+#: the 100% is a small-sample figure and the threshold is tuned on it. The
+#: in-corpus side is 125 real labelled queries. ``AbstentionGate.calibrate``
+#: remains the way to fit this properly on a larger labelled set.
 PRIOR_RULES: tuple[SignalRule, ...] = (
     SignalRule(
-        "dense_max", "low", 0.30, 0.08, 1.0,
+        "dense_max", "low", 0.62, 0.06, 1.0,
         "the best passage only reaches {value:.2f} similarity against a {threshold:.2f} floor",
         "the best passage reaches {value:.2f} similarity against a {threshold:.2f} floor",
     ),
     SignalRule(
-        "max_score", "low", 0.02, 0.01, 0.5,
-        "the fused retrieval score {value:.3f} is below the {threshold:.3f} floor",
-        "the fused retrieval score is {value:.3f}, above the {threshold:.3f} floor",
-    ),
-    SignalRule(
-        "rel_gap", "low", 0.10, 0.05, 0.8,
-        "the top two passages are separated by only {value:.1%}",
-        "the top passage leads the runner-up by {value:.0%}",
-    ),
-    SignalRule(
-        "entropy", "high", 0.95, 0.03, 0.7,
-        "the top scores are nearly flat (entropy {value:.2f} of a possible 1.00)",
-        "the score distribution is peaked (entropy {value:.2f} of a possible 1.00)",
-    ),
-    SignalRule(
-        "agreement", "low", 0.40, 0.15, 0.8,
+        # Real signal, and the widest gap in the table -- but its in-corpus tail
+        # reaches 0.0 on short queries where BM25 has one content word to match,
+        # so it corroborates dense_max rather than overruling it.
+        "agreement", "low", 0.25, 0.15, 0.45,
         "only {value:.0%} of the top passages were found by both retrievers",
         "{value:.0%} of the top passages were found by both retrievers",
     ),
     SignalRule(
-        "top1_agree", "low", 0.50, 0.20, 0.6,
-        "the best passage was found by only one of the two retrievers",
-        "dense and sparse retrieval agreed on the best passage",
+        # Weak but correctly-signed: a flat score distribution means nothing
+        # stood out. Kept at low weight as a tie-breaker.
+        "entropy", "high", 0.97, 0.03, 0.30,
+        "the top scores are nearly flat (entropy {value:.2f} of a possible 1.00)",
+        "the score distribution is peaked (entropy {value:.2f} of a possible 1.00)",
     ),
 )
 
