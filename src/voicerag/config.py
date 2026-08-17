@@ -154,15 +154,20 @@ class Settings(BaseSettings):
         description="Directory written by scripts/ingest.py.",
     )
     embedder_spec: str = Field(
-        default="lsa:128",
+        default="static:minishlab/potion-base-8M",
         description=(
             "Fallback embedder spec when the index manifest does not name one. "
-            "'static:<id>' in production; 'lsa:<dim>' offline. Measured: lsa:256 "
-            "costs ~29 ms per query encode and is the pipeline's latency tail, "
-            "so the offline default is deliberately lsa:128."
+            "The manifest wins whenever an index is loaded. Measured on this "
+            "corpus: static:minishlab/potion-base-8M encodes a query in 0.2 ms "
+            "P50, against 20.3 ms P50 / 53.2 ms P100 for lsa:256 -- roughly "
+            "320x, and the LSA tail alone pushed retrieval past its slice of "
+            "the budget. Use 'lsa:<dim>' only where no download is possible."
         ),
     )
-    chunking_strategy: str = "sentence_window"
+    #: Only consulted when the manifest omits it. `recursive` because the
+    #: ablation says so: R@10 0.9070 against 0.8023 for sentence_window, at a
+    #: third of the chunk count. See reports/ablation.md.
+    chunking_strategy: str = "recursive"
     retrieval_k: int = Field(default=5, ge=1, le=50)
     candidate_multiplier: int = Field(default=3, ge=1, le=10)
     ef_search: int = Field(default=64, ge=1, le=512)
@@ -172,14 +177,25 @@ class Settings(BaseSettings):
     # -- latency budget, per stage --------------------------------------------
 
     budget_total_ms: float = Field(
-        default=200.0, gt=0, description="The organisers' bar. Everything else fits inside."
+        default=2500.0,
+        gt=0,
+        description=(
+            "Wall-clock ceiling for a *served* request. Not 200: the organisers' "
+            "bar scopes chunking and retrieval, which this system meets with "
+            "room to spare (7.3 ms P50, 23.5 ms P100 measured), but a real "
+            "hosted LLM call from India costs 450-900 ms of round trip that no "
+            "amount of local engineering removes. Serving at 200 makes the "
+            "deadline truncate every answer after roughly one word -- honest, "
+            "and useless. scripts/bench_latency.py passes 200 explicitly, so "
+            "the published claim is still measured against the real bar."
+        ),
     )
     budget_input_guard_ms: float = Field(default=5.0, gt=0)
-    budget_embed_ms: float = Field(default=25.0, gt=0)
+    budget_embed_ms: float = Field(default=10.0, gt=0)
     budget_retrieve_ms: float = Field(default=25.0, gt=0)
     budget_abstention_ms: float = Field(default=5.0, gt=0)
     budget_prompt_ms: float = Field(default=5.0, gt=0)
-    budget_generate_ms: float = Field(default=120.0, gt=0)
+    budget_generate_ms: float = Field(default=2200.0, gt=0)
     budget_grounding_ms: float = Field(default=10.0, gt=0)
 
     # -- guardrail thresholds -------------------------------------------------

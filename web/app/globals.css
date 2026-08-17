@@ -125,6 +125,76 @@ main {
   50% { opacity: 0.35; transform: scale(0.82); }
 }
 
+/* --- typed input + preset chips ---
+   The keyboard path is not a courtesy. A denied microphone is a coin flip on a
+   judge's managed browser, and without this the entire system -- retrieval,
+   guardrails, citations, HUD -- is unreachable behind one Block click. */
+
+.type-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.type-row input {
+  flex: 1;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 11px 14px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.type-row input::placeholder { color: var(--muted); }
+
+.type-row input:focus {
+  outline: none;
+  border-color: rgba(34, 211, 238, 0.45);
+}
+
+.type-row input:disabled { opacity: 0.55; }
+
+.type-row button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 11px 20px;
+  font-size: 14px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: border-color 160ms ease;
+}
+
+.type-row button:hover:not(:disabled) { border-color: #334155; }
+.type-row button:disabled { opacity: 0.4; cursor: default; }
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.chip {
+  background: transparent;
+  color: var(--muted);
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  padding: 6px 13px;
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease;
+}
+
+.chip:hover {
+  color: var(--text);
+  border-color: #334155;
+}
+
 /* --- phase pill --- */
 
 .pill {

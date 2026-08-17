@@ -617,6 +617,40 @@ def test_a_faithful_answer_is_grounded():
     assert v.per_claim[0].best_context == 0
 
 
+def test_a_fabricated_non_latin_answer_is_not_certified_as_grounded():
+    """The tokeniser must not fail *open* on the corpus's own scripts.
+
+    With an ASCII-only word class a Devanagari answer tokenises to the empty
+    list, takes the "no claims to check" branch, and comes back
+    ``grounded=True, score=1.0`` -- the hallucination guardrail inverted, and the
+    citation-validity check skipped along with it. MSMARCO-XI is an ai4bharat
+    corpus, so non-Latin text here is the expected case.
+    """
+    # Deliberately free of Latin digits. With numerals present the exact-number
+    # check catches the fabrication by itself and the tokeniser bug stays hidden
+    # -- which is exactly how it survived until now.
+    for fabricated in (
+        "एफिल टॉवर पेरिस में एक बहुत सुंदर इमारत है।",  # Devanagari
+        "সালোকসংশ্লেষণ একটি জৈব রাসায়নিক প্রক্রিয়া।",   # Bengali
+    ):
+        v = GroundingChecker().verify(fabricated, CONTEXT)
+        assert not v.grounded, f"{fabricated!r} was certified as grounded"
+        assert v.score < 1.0, "score 1.0 means the claim was never examined"
+        assert v.per_claim, "the answer must produce at least one checkable claim"
+
+
+def test_non_latin_scripts_tokenise_to_something():
+    """Directly pins the tokeniser, so a regression cannot hide behind scoring."""
+    from voicerag.guardrails.grounding import _tokens as _content_tokens
+
+    for text in (
+        "पानी का क्वथनांक",           # Devanagari
+        "সালোকসংশ্লেষণ কী",            # Bengali
+        "தொலைபேசியை கண்டுபிடித்தவர்",  # Tamil
+    ):
+        assert _content_tokens(text), f"{text!r} tokenised to nothing"
+
+
 def test_a_fabricated_number_fails_even_with_high_word_overlap():
     """The whole reason numbers get a separate exact check: overlap is 7/8 here."""
     v = GroundingChecker().verify("The Eiffel Tower is 450 metres tall [1].", CONTEXT)

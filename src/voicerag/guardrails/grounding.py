@@ -111,7 +111,17 @@ def load_nli(spec: str) -> NLIScorer:
 
 # --- tokenisation -------------------------------------------------------------
 
-_WORD = re.compile(r"[a-z0-9]+")
+#: Unicode-aware on purpose. An ASCII-only class (``[a-z0-9]+``) tokenises a
+#: Devanagari, Bengali or Tamil sentence to the **empty list**, which does not
+#: merely weaken this check -- it inverts it. Zero claim tokens take the
+#: "nothing to verify" branch, and an entirely fabricated non-Latin answer is
+#: certified ``grounded=True, score=1.0``, taking the citation-validity check
+#: down with it. The corpus is ai4bharat's, so non-Latin text reaching this
+#: function is the expected case, not an exotic one.
+#:
+#: ``\w`` under ``re.UNICODE`` (Python 3 default) also admits underscore, which
+#: is excluded so identifiers do not read as words.
+_WORD = re.compile(r"[^\W_]+", re.UNICODE)
 #: Currency/percent aware numeral. Handles ``1,234.5``, ``$40``, ``12%``, years.
 _NUMBER = re.compile(r"(?<![\w.])[-+]?\d[\d,]*(?:\.\d+)?%?")
 _CITATION = re.compile(r"\[(\d+(?:\s*[,;]\s*\d+)*)\]")

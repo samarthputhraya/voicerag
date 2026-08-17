@@ -60,6 +60,19 @@ export interface SarvamConfig {
    * knows you stopped talking before the last audio frame finishes uploading.
    */
   endpointing?: "vad" | "manual";
+  /**
+   * "translate" makes Sarvam return **English** text for speech in any of its
+   * supported Indian languages, in the same call and with no latency penalty
+   * (measured: 945 ms translating Hindi vs 1006 ms transcribing it).
+   *
+   * That is what makes this system genuinely multilingual without a
+   * multilingual embedder. The corpus is indexed in English, and the query
+   * encoder is a model2vec static model whose tokenizer shatters Devanagari
+   * into single characters and [UNK] — measured cross-lingual alignment was
+   * 1/4, i.e. chance. Translating at the STT boundary sidesteps that entirely:
+   * everything downstream of the transcript stays monolingual and fast.
+   */
+  mode?: "transcribe" | "translate";
   baseUrl?: string;
 }
 
@@ -81,6 +94,7 @@ const DEFAULTS = {
   silenceDurationMs: 300,
   minSpeechDurationMs: 250,
   endpointing: "vad" as const,
+  mode: "transcribe" as const,
   baseUrl: defaultRelayUrl(),
 };
 
@@ -122,6 +136,7 @@ export class SarvamRealtimeStt {
       language_code: this.cfg.languageCode,
       stream_type: this.cfg.streamType,
       endpointing: this.cfg.endpointing,
+      mode: this.cfg.mode,
       silence_duration_ms: String(this.cfg.silenceDurationMs),
       min_speech_duration_ms: String(this.cfg.minSpeechDurationMs),
     });

@@ -18,9 +18,27 @@ ENV_EXAMPLE = REPO_ROOT / ".env.example"
 
 
 def test_defaults_are_internally_feasible() -> None:
-    """The stage allowances must fit inside the total, or the target is unmeetable."""
+    """The stage allowances must fit inside the total, or the target is unmeetable.
+
+    The invariant is what matters, not the constant. The serving default is no
+    longer 200 ms: a real hosted LLM call from India costs 450-900 ms of round
+    trip, and at a 200 ms deadline the pipeline truncates every answer after
+    about one word. The 200 ms bar is still measured -- ``bench_latency.py``
+    passes it explicitly -- but it is a benchmark target, not a serving config.
+    """
     settings = Settings(_env_file=None)
-    assert settings.budget_total_ms == 200.0
+    assert sum(settings.stage_budgets().values()) <= settings.budget_total_ms
+    assert settings.budget_headroom_ms >= 0
+
+
+def test_the_200ms_target_remains_feasible_for_the_benchmark() -> None:
+    """The published claim must still be a configuration the system can hold.
+
+    Retrieval-path stages have to fit inside 200 ms with the generation
+    allowance the vendor decode profile implies; otherwise the headline number
+    is unreachable by construction rather than by measurement.
+    """
+    settings = Settings(_env_file=None, budget_total_ms=200.0, budget_generate_ms=120.0)
     assert sum(settings.stage_budgets().values()) <= settings.budget_total_ms
     assert settings.budget_headroom_ms >= 0
 
@@ -43,8 +61,14 @@ def test_env_example_parses_and_configures_nothing(tmp_path: Path) -> None:
     settings = Settings(_env_file=ENV_EXAMPLE)
     assert settings.has_generation_provider() is False
     assert settings.sarvam_api_key is None
-    assert settings.max_tokens == 80
+    assert settings.max_tokens == 160
     assert settings.enable_guardrails is True
+    # A clone that follows the README's `cp .env.example .env` must get the
+    # system as shipped, not a superseded configuration. These three drifted
+    # once already and produced one-word answers on every question.
+    assert settings.embedder_spec == "static:minishlab/potion-base-8M"
+    assert settings.chunking_strategy == "recursive"
+    assert settings.budget_total_ms == 2500.0
     del tmp_path
 
 
