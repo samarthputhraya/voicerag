@@ -276,6 +276,33 @@ export class SarvamRealtimeStt {
   }
 
   /**
+   * Seed the client with audio captured *before* this client existed.
+   *
+   * The VAD emits `onFrameProcessed` for a frame **before** it emits the
+   * `onSpeechStart` that constructs this client -- so the frame carrying the
+   * onset of the first word, and every frame of pre-speech padding behind it,
+   * is produced while there is nothing yet to send it to. Measured effect:
+   * "Can gabapentin treat neuropathy?" reached Sarvam as "And gabapentin treat
+   * neuropathy". The question still retrieved correctly, but a demo that
+   * visibly mishears its first word reads as a broken microphone.
+   *
+   * Queued rather than sent, so this is safe to call at any point in the
+   * socket's lifecycle: the frames drain in order ahead of the live stream the
+   * moment the handshake completes.
+   */
+  prime(frames: readonly Float32Array[]): void {
+    for (const frame of frames) {
+      if (this.pending.length >= 400) {
+        this.dropped = true;
+        break;
+      }
+      this.pending.push(new Float32Array(frame));
+    }
+    // A no-op unless the socket is already open, in which case it sends now.
+    this.flushPending();
+  }
+
+  /**
    * Send the whole utterance, but only if the streaming path dropped any of it.
    *
    * The VAD hands the complete, pre-padded utterance to `onSpeechEnd`. That is

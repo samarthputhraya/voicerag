@@ -11,59 +11,93 @@ slow/flaky network, no Docker, portable Node at
 
 ---
 
-## 1. THE OPEN PROBLEM — read this first
+## 1. THE MICROPHONE BUG — found and fixed
 
-**The user reports the microphone still does not work. Typing works.** This is
-the single blocking issue and it has survived three rounds of fixes.
+The mic failed for three rounds. The root cause was a **module-resolution
+mismatch inside onnxruntime-web**, and it is worth understanding because it
+defeats the obvious diagnostic.
 
-**Critical constraint on whoever picks this up:** the previous session had **no
-microphone and no browser automation**. Every voice fix was reasoned from
-library source and the wire protocol, never observed working end to end in a
-real browser. If you also cannot drive a real mic, say so early rather than
-shipping another unverified fix.
+`vad-web` defaults `baseAssetPath` and `onnxWASMBasePath` to `"./"`. Three
+consumers resolve that relative path against **different bases**:
+
+- `fetch("./silero_vad_legacy.onnx")` and `audioWorklet.addModule("./…")`
+  resolve against the **document** → `localhost:3000/…` → **200**.
+- onnxruntime-web loads its WASM glue with `import(url)` carrying a
+  `webpackIgnore` comment, so it stays a **native** dynamic import. A native
+  import resolves against the **importing module**, which under Next is the
+  bundled chunk in `/_next/static/chunks/app/`.
+
+So ORT requested `/_next/static/chunks/app/ort-wasm-simd-threaded.mjs` → **404**
+→ no WASM backend → `MicVAD.new()` threw *"no available backend found"* → Silero
+never loaded → every `vad.start()` was a silent no-op.
+
+**The trap, and it caught a previous session:** checking that
+`/ort-wasm-simd-threaded.mjs` returns 200 appears to prove the assets are
+healthy. It proves nothing — ORT never requested that URL. Confirmed after the
+fact:
+
+```
+/_next/static/chunks/app/ort-wasm-simd-threaded.mjs  -> 404   (what ORT asked for)
+/ort-wasm-simd-threaded.mjs                          -> 200   (what was checked)
+```
+
+**The fix** (`web/app/page.tsx`): absolute URLs everywhere, since every consumer
+resolves those identically.
+
+- `ASSET_BASE = window.location.origin + "/"`, passed as both `baseAssetPath`
+  and `onnxWASMBasePath`. Evaluated lazily — this module is server-rendered too.
+- `ortConfig` sets `ort.env.wasm.wasmPaths` in its **object** form
+  (`{wasm, mjs}`), which ORT hands straight to `import()`/`locateFile` without
+  re-resolving. The string form is only a prefix and is still subject to the
+  bundler-rewritten base, so it does not survive Next's chunking.
+- `ort.env.wasm.numThreads = 1`, because the threaded build wants
+  `SharedArrayBuffer` and Next sends no COOP/COEP headers. ORT falls back on its
+  own, but only after warning and re-deciding mid-load; pinning keeps it to one
+  branch.
+
+Also added: a **pre-roll buffer** (`PRE_ROLL_FRAMES = 5`, `preRollRef`). The VAD
+reports frames to `onFrameProcessed` before it declares speech started, so those
+leading frames — which carry the first word — are retained and primed into the
+socket via `stt.prime()` when the session opens.
+
+### Still true, and still the main risk
+
+That environment had **no microphone and no browser automation**, so nothing on
+the voice path was ever observed working end to end in a real browser. The fix
+is well-reasoned and empirically supported by the 404, but **someone must still
+click the mic and confirm.** If you cannot drive a real mic either, say so
+rather than shipping another unverified change.
 
 ### What IS verified working (measured, not assumed)
 
-- The relay itself: `ws://127.0.0.1:8000/stt/stream` connects in **8 ms** and
-  returns real transcripts when fed synthesized speech from a Python client.
+- The relay: `ws://127.0.0.1:8000/stt/stream` connects in **8 ms** and returns
+  real transcripts when fed synthesized speech from a Python client.
 - Sarvam STT, TTS and translate all return 200 with a live key.
 - Full voice→answer chain, driven from Python: **~1.0–1.6 s** after speech ends,
   in Hindi, Bengali and Tamil.
 
-So: **backend voice works. The browser leg is what fails.**
+### Ruled out (checked in `web/node_modules`, do not redo)
 
-### Already ruled out (checked in `web/node_modules`, do not redo)
-
-- `onFrameProcessed` **does** pass the `Float32Array` frame — not the bug.
+- `onFrameProcessed` **does** pass the `Float32Array` frame.
 - `@ricky0123/vad-web` resolves to the **top-level `onnxruntime-web` 1.27.0**;
-  there is no nested copy with different WASM filenames.
-- Every asset the VAD requests returns **200** from the dev server:
-  `vad.worklet.bundle.min.js`, `silero_vad_v5.onnx`, `silero_vad_legacy.onnx`,
-  `ort-wasm-simd-threaded.wasm`, `ort-wasm-simd-threaded.mjs`.
-  (`ort-wasm.wasm` / `ort-wasm-simd.wasm` 404, but 1.27 never requests them.)
+  no nested copy with different WASM filenames.
+- `ort-wasm.wasm` / `ort-wasm-simd.wasm` 404, but 1.27 never requests them.
 
-### The prime suspects, in order
+### Belt-and-braces already in place
 
-1. **Open the browser devtools console and network tab.** Nobody has done this.
-   The answer is almost certainly sitting there. `vad.errored` is now surfaced
-   in the UI as of the last commit, so a load failure should name itself.
-2. **`vad-web` defaults are `baseAssetPath: "./"` and `onnxWASMBasePath: "./"`
-   — relative.** At `localhost:3000/` that resolves to `/` and works, but it is
-   fragile. Try passing them explicitly as `"/"` in `VAD_OPTS`
-   (`web/app/page.tsx`).
-3. **Threaded WASM needs cross-origin isolation.** `ort-wasm-simd-threaded.wasm`
-   wants `SharedArrayBuffer`, which needs COOP/COEP headers Next does not send
-   by default. ORT normally falls back to single-threaded, but if it does not,
-   the model never initialises. Try setting
-   `ort.env.wasm.numThreads = 1` before VAD init, or add the COOP/COEP headers
-   in `next.config.mjs`.
-4. **Microphone permission / secure origin.** `localhost` is a secure origin so
-   this *should* be fine, but confirm the browser actually prompted.
-5. **`onSpeechEnd` fallback (added last commit, unverified).** The VAD hands the
-   complete utterance to `onSpeechEnd`; the code now resends it in full when the
-   frame stream is known to have dropped audio. If streaming is the problem,
-   consider making this the *only* path (simpler, loses partial transcripts and
-   speculative retrieval, but removes the race entirely).
+`onSpeechEnd` receives the **complete** utterance from the VAD, padding
+included. `sendUtteranceIfIncomplete()` resends it in 100 ms chunks *only* when
+the frame stream is known to have dropped audio (`dropped` flag), so the two
+paths cannot duplicate the transcript. If streaming ever proves unreliable
+again, making `onSpeechEnd` the sole path is the simplification — it costs
+partial transcripts and speculative retrieval, and removes the race entirely.
+
+### If it still fails
+
+`vad.errored` is surfaced in the UI, so a load failure now names itself rather
+than leaving the button on "Loading voice model…". Open devtools, click the mic,
+and read the console and network tab — and check **which URL** a 404 is on, not
+merely whether the file exists at the path you expect.
 
 ---
 
@@ -213,7 +247,9 @@ tens of minutes).
 
 ## 8. What to do next, in priority order
 
-1. **Fix the microphone.** Devtools console first. See §1.
+1. **Confirm the microphone.** The root cause is found and fixed (§1) but has
+   never been observed working in a real browser. Click the mic; that is the
+   whole task. Everything below is blocked behind a demo that visibly works.
 2. **Deploy the live link** — a required deliverable, currently missing. All six
    known blockers are fixed (`.dockerignore`, `model2vec` in requirements, env
    vars un-prefixed, `INDEX_URL`/`INDEX_ROWS` build args, correct baked model,

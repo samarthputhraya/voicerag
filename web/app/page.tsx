@@ -23,6 +23,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMicVAD } from "@ricky0123/vad-react";
+import type { RealTimeVADOptions } from "@ricky0123/vad-web";
 
 import LatencyHud, { splitBreakdown, type StageBar } from "../components/LatencyHud";
 import {
@@ -36,6 +37,61 @@ import {
   type Stats,
 } from "../lib/api";
 import { SarvamRealtimeStt, type TranscriptEvent } from "../lib/sarvam";
+
+/**
+ * Where the VAD's runtime assets live.
+ *
+ * `vad-web` defaults `baseAssetPath` and `onnxWASMBasePath` to `"./"`, and that
+ * default is the entire reason the microphone never worked in a browser. A
+ * relative path is resolved against whatever the *resolver* considers its base,
+ * and the three consumers here disagree about what that is:
+ *
+ *   - `fetch("./silero_vad_legacy.onnx")` and `audioWorklet.addModule("./…")`
+ *     resolve against the **document**, so they hit `localhost:3000/…` and
+ *     return 200.
+ *   - onnxruntime-web loads its WASM glue with `import(url)` carrying a
+ *     `webpackIgnore` comment, so it stays a **native** dynamic import — and a
+ *     native import resolves against the **importing module**, which under Next
+ *     is the bundled chunk in `/_next/static/chunks/app/`. `"./ort-wasm-simd-
+ *     threaded.mjs"` therefore resolved to
+ *     `/_next/static/chunks/app/ort-wasm-simd-threaded.mjs`, which 404s.
+ *
+ * That 404 took out the only WASM backend, so `MicVAD.new()` threw
+ * "no available backend found", the Silero model never loaded, and every later
+ * `vad.start()` became a silent no-op. Verifying that
+ * `/ort-wasm-simd-threaded.mjs` returns 200 was misleading — ORT never asked
+ * for that URL.
+ *
+ * Absolute URLs remove the disagreement: every consumer resolves them the same
+ * way. Evaluated lazily because this module is also rendered on the server,
+ * where `window` does not exist; the root-relative fallback is never the value
+ * actually used by the browser.
+ */
+const ASSET_BASE =
+  typeof window === "undefined" ? "/" : `${window.location.origin}/`;
+
+/**
+ * ORT's own loader configuration, applied after `vad-web` has set its (string)
+ * prefix, so this wins.
+ *
+ * `wasmPaths` as a string is only a *prefix*, and the prefix is not what breaks
+ * — the bundler-rewritten base is. The object form is an explicit per-file
+ * override that ORT passes straight to `import()` and `locateFile` without
+ * re-resolving, which is the only form that survives Next's chunking.
+ *
+ * Single-threaded on purpose: the threaded build wants `SharedArrayBuffer`,
+ * which needs the COOP/COEP headers Next does not send. ORT detects that and
+ * falls back on its own, but only after logging two warnings and re-deciding
+ * mid-load; pinning it keeps the model load to one branch.
+ */
+const configureOrt: NonNullable<RealTimeVADOptions["ortConfig"]> = (ort) => {
+  ort.env.logLevel = "error";
+  ort.env.wasm.numThreads = 1;
+  ort.env.wasm.wasmPaths = {
+    wasm: `${window.location.origin}/ort-wasm-simd-threaded.wasm`,
+    mjs: `${window.location.origin}/ort-wasm-simd-threaded.mjs`,
+  };
+};
 
 /**
  * VAD tuning.
@@ -56,7 +112,13 @@ const VAD_OPTS = {
   redemptionMs: 260,
   preSpeechPadMs: 300,
   minSpeechMs: 250,
+  baseAssetPath: ASSET_BASE,
+  onnxWASMBasePath: ASSET_BASE,
+  ortConfig: configureOrt,
 } as const;
+
+/** How many pre-speech frames to keep. See `preRollRef`. */
+const PRE_ROLL_FRAMES = 5;
 
 /**
  * Every language Sarvam's realtime endpoint accepts, which is the whole point of
@@ -82,6 +144,18 @@ const LANGUAGES = [
 ] as const;
 
 type Phase = "idle" | "listening" | "thinking" | "answering" | "done" | "error";
+
+/**
+ * One wording for "the voice model did not load", shared by the effect that
+ * notices it and the click handler that refuses to pretend otherwise.
+ */
+function vadLoadError(errored: string | false): string {
+  return (
+    `Voice model failed to load: ${
+      typeof errored === "string" ? errored : "unknown error"
+    }. Typing still works.`
+  );
+}
 
 export default function Home() {
   const [phase, setPhase] = useState<Phase>("idle");
@@ -115,6 +189,13 @@ export default function Home() {
   const [stats, setStats] = useState<Stats | null>(null);
 
   const sttRef = useRef<SarvamRealtimeStt | null>(null);
+  /**
+   * The last few frames heard before the VAD called it speech. The legacy
+   * Silero model runs on 1536-sample frames, so each is 96 ms and five of them
+   * comfortably cover the 300 ms of `preSpeechPadMs` the VAD is configured to
+   * prepend, plus the frame that triggered the detection itself.
+   */
+  const preRollRef = useRef<Float32Array[]>([]);
   const abortRef = useRef<(() => void) | null>(null);
   const lastSpecRef = useRef("");
   const clockRef = useRef(0);
@@ -296,8 +377,15 @@ export default function Home() {
         // and it is free, because Sarvam does it in the same call.
         mode: language === "en-IN" ? "transcribe" : "translate",
       });
+      // Hand over the audio the VAD had already heard before it decided this
+      // was speech. Without it the recogniser never receives the onset of the
+      // first word, because the VAD reports a frame to `onFrameProcessed`
+      // before it reports the speech start that creates this client.
+      stt.prime(preRollRef.current);
+      preRollRef.current = [];
+
       // Publish the client BEFORE awaiting the handshake. `onFrameProcessed`
-      // fires every ~32 ms from this moment, and until this ref is set those
+      // fires every ~96 ms from this moment, and until this ref is set those
       // frames go nowhere. Assigning first lets them land in the client's
       // pending buffer, which drains in order the instant the socket opens.
       // Assigning after `await` was the bug that made short questions produce
@@ -312,7 +400,18 @@ export default function Home() {
       });
     },
     onFrameProcessed: (_p, frame: Float32Array) => {
-      sttRef.current?.sendAudio(frame);
+      const stt = sttRef.current;
+      if (stt) {
+        stt.sendAudio(frame);
+        return;
+      }
+      // No client yet, so this frame is either silence or -- for the last few
+      // frames before the VAD makes up its mind -- the beginning of the
+      // question. Keep a short rolling window of them rather than discarding
+      // the word the user actually opened with. `onSpeechStart` claims it.
+      const roll = preRollRef.current;
+      roll.push(new Float32Array(frame));
+      if (roll.length > PRE_ROLL_FRAMES) roll.shift();
     },
     onSpeechEnd: (audio: Float32Array) => {
       // The VAD hands back the COMPLETE utterance here, pre-speech padding
@@ -338,11 +437,8 @@ export default function Home() {
   // works, which is indistinguishable from the app ignoring you.
   useEffect(() => {
     if (vad.errored) {
-      setError(
-        `Voice model failed to load: ${
-          typeof vad.errored === "string" ? vad.errored : "unknown error"
-        }. Typing still works.`,
-      );
+      setError(vadLoadError(vad.errored));
+      setPhase("error");
     }
   }, [vad.errored]);
 
@@ -351,25 +447,38 @@ export default function Home() {
       vad.pause();
       sttRef.current?.close();
       sttRef.current = null;
+      // Otherwise up to half a second of pre-pause room tone would be
+      // prepended to whatever the user says after starting the mic again.
+      preRollRef.current = [];
       setPhase("idle");
-    } else {
-      setError(null);
-      // `vad.start()` returns a promise that rejects when the user denies the
-      // microphone, when the page is not on a secure origin, or when the ONNX
-      // assets 404. Firing it unawaited and then unconditionally claiming
-      // "listening" produced a UI that sat in the listening state forever
-      // after a single Block click, with nothing on screen explaining why.
-      // Ask by voice OR by typing -- both reach the same pipeline.
-      void Promise.resolve(vad.start())
-        .then(() => setPhase("listening"))
-        .catch((e: unknown) => {
-          setError(
-            `Microphone unavailable: ${(e as Error)?.message ?? "permission denied"}. ` +
-              `You can still type your question below.`,
-          );
-          setPhase("error");
-        });
+      return;
     }
+    // `useMicVAD`'s `start()` is a no-op when the model failed to load: it is
+    // written as `if (!loading && !errored) { await vad?.start() }` and then
+    // resolves either way. So an errored VAD produced a *successful* promise,
+    // this handler cleared the error banner and set the phase to "listening",
+    // and the UI sat there claiming to hear you with no microphone open and
+    // nothing on screen to explain it. That is the state the demo was stuck in.
+    // Check first, and keep the diagnosis on screen instead of erasing it.
+    if (vad.errored) {
+      setError(vadLoadError(vad.errored));
+      setPhase("error");
+      return;
+    }
+    setError(null);
+    // Rejects when the user denies the microphone or the page is not on a
+    // secure origin. Firing it unawaited and unconditionally claiming
+    // "listening" produced the same lie for a different reason.
+    // Ask by voice OR by typing -- both reach the same pipeline.
+    void Promise.resolve(vad.start())
+      .then(() => setPhase("listening"))
+      .catch((e: unknown) => {
+        setError(
+          `Microphone unavailable: ${(e as Error)?.message ?? "permission denied"}. ` +
+            `You can still type your question below.`,
+        );
+        setPhase("error");
+      });
   }, [vad]);
 
   const [typed, setTyped] = useState("");
