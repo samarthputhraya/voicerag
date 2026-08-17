@@ -1,0 +1,67 @@
+# Render blueprint for the VoiceRAG API.
+#
+# Region choice is the single most consequential line in this file.
+#
+# The pipeline has two remote dependencies pulling in opposite directions:
+#   - Sarvam STT is hosted in India.
+#   - Groq inference is hosted in the US.
+#
+# We resolve the conflict by splitting the path: the browser streams audio
+# directly to Sarvam (India -> India, ~15-40ms), and only the finished
+# transcript crosses to this service. That leaves the server's own critical
+# path -- embed, retrieve, generate -- entirely between this container and Groq,
+# so the server belongs in Oregon, next to Groq, not in Singapore next to the
+# user. Co-location turns a ~200ms LLM round trip into a ~10ms one.
+#
+# The cost is one India->US round trip for the transcript and the streamed
+# answer. That is reported honestly and separately in the benchmark as
+# "client network", never folded into the pipeline number.
+
+services:
+  - type: web
+    name: voicerag-api
+    runtime: docker
+    dockerfilePath: ./deploy/Dockerfile
+    dockerContext: .
+    region: oregon
+    plan: starter # 512MB RAM is not enough for a 200k-chunk index; starter gives 2GB.
+    healthCheckPath: /healthz
+    autoDeploy: false # Never let a push mid-demo restart the service.
+
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+
+      - key: VOICERAG_EMBEDDER
+        value: static:/app/models/embedder
+      - key: VOICERAG_INDEX_DIR
+        value: /app/data/index
+      - key: VOICERAG_GENERATE_MODEL
+        value: openai/gpt-oss-20b
+      - key: VOICERAG_FALLBACK_MODEL
+        value: gemini-2.0-flash-lite
+
+      # Latency budget, in milliseconds, enforced by the Deadline in the harness.
+      - key: VOICERAG_BUDGET_TOTAL_MS
+        value: "200"
+      - key: VOICERAG_BUDGET_RETRIEVE_MS
+        value: "25"
+      - key: VOICERAG_BUDGET_GENERATE_MS
+        value: "150"
+
+      - key: VOICERAG_SPECULATIVE
+        value: "true"
+
+      # Comma-separated origins allowed to call this API.
+      - key: VOICERAG_CORS_ORIGINS
+        value: "https://voicerag.vercel.app,http://localhost:3000"
+
+      # Keeps OpenMP from oversubscribing the box; see the Dockerfile comment.
+      - key: OMP_NUM_THREADS
+        value: "1"

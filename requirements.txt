@@ -1,0 +1,42 @@
+# Serving requirements, pinned to the versions this repo's numbers were measured
+# on. `pip install -r requirements.txt` is enough to run the API, the offline
+# smoke test and the whole test suite -- no credentials, no downloads.
+#
+#   pip install -r requirements.txt
+#   python scripts/smoke.py                     # end-to-end, offline
+#   uvicorn voicerag.api.main:app --port 8000
+#
+# Optional extras live in pyproject.toml:
+#   pip install -e '.[embed]'   model2vec / onnxruntime static embedders
+#   pip install -e '.[data]'    datasets + pyarrow, for scripts/ingest.py
+#   pip install -e '.[dev]'     pytest + ruff
+
+# --- core numerics -----------------------------------------------------------
+numpy==2.4.6
+scipy==1.17.1
+
+# --- retrieval ---------------------------------------------------------------
+faiss-cpu==1.15.0          # HNSW; measured 0.63 ms p50 at 200k x 256, efSearch 32
+bm25s==0.3.10
+PyStemmer==3.1.0           # bm25s stemmer; the pure-python fallback is far slower
+
+# --- configuration and schemas -----------------------------------------------
+pydantic==2.13.4
+pydantic-settings==2.15.0
+python-dotenv==1.2.3       # pulled in by pydantic-settings for .env parsing
+
+# --- web layer ---------------------------------------------------------------
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn==0.52.3
+
+# --- provider transports -----------------------------------------------------
+httpx==0.28.1              # Groq, Gemini and the Sarvam batch/token endpoints
+websockets==17.0.1         # Sarvam and ElevenLabs realtime STT
+
+# --- serialisation -----------------------------------------------------------
+orjson==3.12.0             # ChunkStore fast path; the stdlib json fallback works
+
+# --- tests -------------------------------------------------------------------
+pytest==9.1.1
+pytest-asyncio==1.4.0
