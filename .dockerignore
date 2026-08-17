@@ -1,0 +1,35 @@
+# The build context is otherwise ~4 GB, almost all of it things the image must
+# not contain: the local virtualenv, the 440 MB source shard, three built
+# indexes, and node_modules. Docker uploads the whole context to the daemon
+# before the first instruction runs, so this file is the difference between a
+# build that starts in a second and one that starts in several minutes.
+
+.git/
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+
+# Secrets. Never in an image, even one that is never pushed.
+.env
+
+# The index is fetched or built by the Dockerfile itself -- see the comment
+# there. Copying it from the context would also mean copying data/raw, which is
+# the 440 MB parquet plus a 55 MB rows cache.
+data/
+
+# Frontend: deployed separately (Vercel/Pages), not served by this API.
+web/
+
+# Reports are evidence for the README, not runtime inputs.
+reports/
+plan.md
+
+# Docs and tooling that do not affect the running service.
+docs/
+deploy/
+tests/
+.github/
+*.md
+!README.md

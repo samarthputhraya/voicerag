@@ -470,6 +470,39 @@ class TestSttRelay:
         # The account key is a header on the upgrade, never a query parameter.
         assert "sk-secret" not in url
 
+    def test_refuses_a_websocket_upgrade_from_an_unlisted_origin(self, corpus: Any) -> None:
+        """CORS does not apply to WebSocket upgrades.
+
+        Without this check any page on the internet can open the relay and spend
+        the account's Sarvam quota -- and `CORSMiddleware`, which protects
+        `/ask`, does nothing to stop it.
+        """
+        client, _ = make_client(
+            corpus,
+            ScriptedGenerator(ANSWER),
+            sarvam_api_key="sk-secret",
+            cors_origins=["https://voicerag.example"],
+        )
+        with client:
+            with pytest.raises(Exception):
+                with client.websocket_connect(
+                    "/stt/stream", headers={"origin": "https://evil.example"}
+                ):
+                    pass
+
+    def test_allows_a_listed_origin(self, corpus: Any) -> None:
+        client, _ = make_client(
+            corpus,
+            ScriptedGenerator(ANSWER),
+            cors_origins=["https://voicerag.example"],
+        )
+        with client, client.websocket_connect(
+            "/stt/stream", headers={"origin": "https://voicerag.example"}
+        ) as ws:
+            # No Sarvam key configured in this fixture, so the relay reports
+            # that rather than dialling out -- which is proof the origin passed.
+            assert ws.receive_json()["code"] == "stt_unconfigured"
+
     def test_client_may_override_only_whitelisted_parameters(self) -> None:
         from voicerag.api.stt_relay import _upstream_url
 

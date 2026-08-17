@@ -59,15 +59,60 @@ def _progress(label: str, every: int = 2000):
     return report
 
 
+def _rows_from_parquet(path: Path, limit: int | None) -> Iterator[dict[str, Any]]:
+    """Stream rows straight out of a local parquet shard.
+
+    The ``datasets`` streaming path resolves data files against the hub before
+    the first row appears, and on a 55 GB repository that step has been observed
+    to hang for tens of minutes with no output. Reading a downloaded shard with
+    pyarrow removes the hub, the resolution step and the ``datasets`` dependency
+    from the critical path -- which matters most inside a container build, where
+    a hang is indistinguishable from progress until the builder times out.
+    """
+    import pyarrow.parquet as pq
+
+    pf = pq.ParquetFile(path)
+    seen = 0
+    for batch in pf.iter_batches(batch_size=2000):
+        for row in batch.to_pylist():
+            yield row
+            seen += 1
+            if limit is not None and seen >= limit:
+                return
+
+
+def _download_shard(repo_id: str, shard: str, dest: Path) -> Path:
+    """Fetch one parquet shard from the hub, returning its local path."""
+    from huggingface_hub import hf_hub_download
+
+    print(f"downloading {repo_id}:{shard}", flush=True)
+    return Path(
+        hf_hub_download(
+            repo_id=repo_id,
+            filename=shard,
+            repo_type="dataset",
+            local_dir=str(dest),
+        )
+    )
+
+
 def _rows(args: argparse.Namespace) -> Iterator[dict[str, Any]]:
-    """Resolve the row source in priority order: cache, synthetic, hub."""
+    """Resolve the row source in priority order: cache, parquet, synthetic, hub."""
     if args.rows:
         print(f"reading cached rows from {args.rows}", flush=True)
         yield from load_jsonl(args.rows, limit=args.limit)
         return
+    if args.parquet:
+        print(f"reading {args.parquet} (limit={args.limit})", flush=True)
+        yield from _rows_from_parquet(args.parquet, args.limit)
+        return
     if args.synthetic:
         print(f"generating {args.synthetic} synthetic rows (offline fixture)", flush=True)
         yield from synthetic_rows(args.synthetic, seed=args.seed)
+        return
+    if args.download:
+        local = _download_shard(args.repo_id, args.shard, args.out.parent / "raw")
+        yield from _rows_from_parquet(local, args.limit)
         return
     print(f"streaming {args.repo_id}:{args.shard} (limit={args.limit})", flush=True)
     yield from load_msmarco_xi(args.shard, limit=args.limit, repo_id=args.repo_id)
@@ -92,6 +137,13 @@ def main(argv: list[str] | None = None) -> int:
     src.add_argument("--synthetic", type=int, default=0, metavar="N",
                      help="build from N synthetic rows instead of the hub (offline)")
     src.add_argument("--rows", type=Path, help="read rows from a cached .jsonl(.gz) instead")
+    src.add_argument("--parquet", type=Path,
+                     help="read rows from an already-downloaded shard, skipping the hub entirely")
+    src.add_argument("--download", action="store_true",
+                     help="download the shard with hf_hub_download, then read it with pyarrow. "
+                          "Preferred over the default `datasets` streaming path in a container "
+                          "build: streaming resolves data files against a 55GB repo first, which "
+                          "has been observed to hang with no output.")
     src.add_argument("--cache-rows", action="store_true",
                      help="also write the consumed rows to <out>/rows.jsonl.gz")
 

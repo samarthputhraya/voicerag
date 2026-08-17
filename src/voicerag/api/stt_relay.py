@@ -92,6 +92,34 @@ def _upstream_url(cfg: Settings, client_params: dict[str, str]) -> str:
     return f"{REALTIME_URL}?{urlencode(params)}"
 
 
+#: Hard ceiling on one relay session, in seconds. A browser that opens the
+#: socket and never closes it holds an upstream Sarvam session open against the
+#: account's concurrency quota indefinitely. Spoken questions are seconds long;
+#: two minutes is generous.
+_MAX_SESSION_S = 120.0
+
+
+def _origin_allowed(origin: str, cfg: Settings) -> bool:
+    """Whether a WebSocket upgrade from ``origin`` may proceed.
+
+    CORS does **not** apply to WebSocket upgrades -- ``CORSMiddleware`` protects
+    ``/ask`` and leaves this endpoint wide open. Without this check any page on
+    the internet can open the relay and spend the account's Sarvam quota, which
+    for a public demo link is a matter of time rather than luck.
+
+    An absent Origin header is allowed: non-browser clients (the test harness,
+    ``websockets`` from a script) do not send one, and they are not the threat
+    model -- a malicious script can send any Origin it likes anyway. The check
+    exists to stop *other people's web pages* silently using this relay.
+    """
+    if not origin:
+        return True
+    allowed = list(cfg.cors_origins or [])
+    if "*" in allowed:
+        return True
+    return origin.rstrip("/") in {o.rstrip("/") for o in allowed}
+
+
 async def relay_sarvam(ws: WebSocket, cfg: Settings) -> None:
     """Accept a browser socket and pump it to Sarvam until either side closes.
 
@@ -99,6 +127,14 @@ async def relay_sarvam(ws: WebSocket, cfg: Settings) -> None:
         ws: The browser-facing WebSocket, not yet accepted.
         cfg: Settings supplying the account key and model defaults.
     """
+    origin = ws.headers.get("origin", "")
+    if not _origin_allowed(origin, cfg):
+        log.warning("stt relay refused origin %r", origin)
+        # Refuse before the handshake completes. Accepting and then closing
+        # would still have opened a socket on our side.
+        await ws.close(code=1008)
+        return
+
     await ws.accept()
 
     if cfg.sarvam_api_key is None:
@@ -153,8 +189,21 @@ async def relay_sarvam(ws: WebSocket, cfg: Settings) -> None:
 
     try:
         async with upstream_cm as upstream:
-            log.info("stt relay open")
-            await _pump(ws, upstream)
+            log.info("stt relay open (origin=%r)", origin or "-")
+            await asyncio.wait_for(_pump(ws, upstream), timeout=_MAX_SESSION_S)
+    except asyncio.TimeoutError:
+        log.info("stt relay hit the %.0fs session cap", _MAX_SESSION_S)
+        try:
+            await ws.send_json(
+                {
+                    "event": "relay.error",
+                    "code": "session_expired",
+                    "is_fatal": True,
+                    "message": f"session exceeded {_MAX_SESSION_S:.0f}s",
+                }
+            )
+        except Exception:  # noqa: BLE001 - client already gone
+            pass
     except WebSocketDisconnect:
         pass
     except Exception as exc:  # noqa: BLE001 - never leak a traceback to a client

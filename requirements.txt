@@ -34,6 +34,15 @@ uvicorn==0.52.3
 httpx==0.28.1              # Groq, Gemini and the Sarvam batch/token endpoints
 websockets==17.0.1         # Sarvam and ElevenLabs realtime STT
 
+# --- embeddings --------------------------------------------------------------
+# Not optional for a *served* deployment. The static model2vec encoder is what
+# makes the query path 0.2 ms P50 instead of the 20.3 ms the pure-numpy LSA
+# fallback costs, and the shipped index's manifest names it, so an image without
+# it cannot load the index it was built with. model2vec pulls only tokenizers
+# (a small wheel) -- no torch.
+model2vec==0.9.0
+tokenizers==0.23.1
+
 # --- serialisation -----------------------------------------------------------
 orjson==3.12.0             # ChunkStore fast path; the stdlib json fallback works
 

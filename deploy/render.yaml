@@ -1,21 +1,24 @@
 # Render blueprint for the VoiceRAG API.
 #
-# Region choice is the single most consequential line in this file.
+# Two things in this file were wrong for long enough to be worth recording.
 #
-# The pipeline has two remote dependencies pulling in opposite directions:
-#   - Sarvam STT is hosted in India.
-#   - Groq inference is hosted in the US.
+# **Every environment variable was named `VOICERAG_*`.** `voicerag.config.Settings`
+# sets no `env_prefix` and uses `extra="ignore"`, so all nine were parsed,
+# matched nothing, and were discarded in silence -- the service ran on defaults
+# while the blueprint looked configured. Verified: `VOICERAG_BUDGET_TOTAL_MS=999`
+# leaves `budget_total_ms` at its default. The names below are the Settings field
+# names, upper-cased, which is what pydantic-settings actually binds.
 #
-# We resolve the conflict by splitting the path: the browser streams audio
-# directly to Sarvam (India -> India, ~15-40ms), and only the finished
-# transcript crosses to this service. That leaves the server's own critical
-# path -- embed, retrieve, generate -- entirely between this container and Groq,
-# so the server belongs in Oregon, next to Groq, not in Singapore next to the
-# user. Co-location turns a ~200ms LLM round trip into a ~10ms one.
+# **The plan comment contradicted the plan.** `starter` is 512 MB, not 2 GB. This
+# service loads a 197k-chunk index and measures ~740 MB resident, so `starter`
+# is an out-of-memory kill on the first request, not a tight fit.
 #
-# The cost is one India->US round trip for the transcript and the streamed
-# answer. That is reported honestly and separately in the benchmark as
-# "client network", never folded into the pipeline number.
+# On region: the browser no longer streams audio straight to Sarvam -- it relays
+# through `WS /stt/stream` here, because Sarvam mints no ephemeral browser
+# credential (see api/stt_relay.py). So this container now sits on *both* remote
+# legs: India for speech, US for generation. Oregon still wins, because the
+# generation leg is on the critical path for every request while the STT leg is
+# only on voice requests, but the trade is real and no longer free.
 
 services:
   - type: web
@@ -24,44 +27,57 @@ services:
     dockerfilePath: ./deploy/Dockerfile
     dockerContext: .
     region: oregon
-    plan: starter # 512MB RAM is not enough for a 200k-chunk index; starter gives 2GB.
+    plan: standard # 2 GB. `starter` is 512 MB; the index alone needs ~740 MB resident.
     healthCheckPath: /healthz
     autoDeploy: false # Never let a push mid-demo restart the service.
+
+    # `data/` is gitignored, so the image must obtain the index itself. Prefer
+    # INDEX_URL (about a minute) over building from the dataset (6-10 minutes)
+    # when a prebuilt tarball is published.
+    dockerBuildArgs:
+      INDEX_ROWS: "20000"
+      INDEX_STRATEGY: recursive
+      EMBED_MODEL: minishlab/potion-base-8M
 
     envVars:
       - key: GROQ_API_KEY
         sync: false
-      - key: GEMINI_API_KEY
+      - key: OPENAI_API_KEY # fallback provider; Groq free tier caps at 8k tokens/min
         sync: false
       - key: SARVAM_API_KEY
         sync: false
-      - key: ELEVENLABS_API_KEY
+      - key: STT_SIGNING_KEY
         sync: false
 
-      - key: VOICERAG_EMBEDDER
-        value: static:/app/models/embedder
-      - key: VOICERAG_INDEX_DIR
+      - key: INDEX_DIR
         value: /app/data/index
-      - key: VOICERAG_GENERATE_MODEL
+      - key: EMBEDDER_SPEC
+        value: static:/app/models/embedder
+      - key: CHUNKING_STRATEGY
+        value: recursive
+      - key: GROQ_MODEL
         value: openai/gpt-oss-20b
-      - key: VOICERAG_FALLBACK_MODEL
-        value: gemini-2.0-flash-lite
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+      - key: ENVIRONMENT
+        value: prod
 
-      # Latency budget, in milliseconds, enforced by the Deadline in the harness.
-      - key: VOICERAG_BUDGET_TOTAL_MS
-        value: "200"
-      - key: VOICERAG_BUDGET_RETRIEVE_MS
+      # Serving budget, in milliseconds, enforced by the Deadline in the harness.
+      # Not 200: a real hosted LLM call costs 450-900 ms of round trip, and at a
+      # 200 ms deadline the pipeline truncates every answer after about one word.
+      # The 200 ms claim is measured separately by scripts/bench_latency.py,
+      # which passes it explicitly. See the README's latency section.
+      - key: BUDGET_TOTAL_MS
+        value: "2500"
+      - key: BUDGET_GENERATE_MS
+        value: "2200"
+      - key: BUDGET_RETRIEVE_MS
         value: "25"
-      - key: VOICERAG_BUDGET_GENERATE_MS
-        value: "150"
 
-      - key: VOICERAG_SPECULATIVE
+      - key: ENABLE_SPECULATIVE_RETRIEVAL
         value: "true"
 
-      # Comma-separated origins allowed to call this API.
-      - key: VOICERAG_CORS_ORIGINS
+      # Comma-separated origins allowed to call this API. The WebSocket relay
+      # does its own origin check -- CORS does not apply to WS upgrades.
+      - key: CORS_ORIGINS
         value: "https://voicerag.vercel.app,http://localhost:3000"
-
-      # Keeps OpenMP from oversubscribing the box; see the Dockerfile comment.
-      - key: OMP_NUM_THREADS
-        value: "1"
