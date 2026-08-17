@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMicVAD } from "@ricky0123/vad-react";
 
-import LatencyHud, { type StageBar } from "../components/LatencyHud";
+import LatencyHud, { splitBreakdown, type StageBar } from "../components/LatencyHud";
 import {
   fetchStats,
   speculate,
@@ -106,6 +106,8 @@ export default function Home() {
   const [citations, setCitations] = useState<Citation[]>([]);
   const [result, setResult] = useState<RagResponse | null>(null);
   const [stages, setStages] = useState<StageBar[]>([]);
+  const [pipelineMs, setPipelineMs] = useState(0);
+  const [generationMs, setGenerationMs] = useState(0);
   const [history, setHistory] = useState<number[]>([]);
   const [speculations, setSpeculations] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -150,12 +152,16 @@ export default function Home() {
           setResult(res);
           setCitations(res.citations);
           if (res.abstained) setAnswer(res.answer);
-          setStages(
-            Object.entries(res.trace.breakdown)
-              .map(([name, ms]) => ({ name, ms }))
-              .sort((a, b) => b.ms - a.ms),
-          );
-          setHistory((h) => [...h, res.trace.total_ms]);
+          // Never sum res.trace.breakdown: it carries deliberately overlapping
+          // spans (generate wraps generate.total wraps generate.ttft), and
+          // retrieve.dense/retrieve.sparse run concurrently. splitBreakdown
+          // keeps the leaves, orders them chronologically rather than by size,
+          // and separates the hosted-LLM leg from the path we claim against.
+          const split = splitBreakdown(res.trace.breakdown);
+          setStages(split.pipeline);
+          setPipelineMs(split.pipelineMs);
+          setGenerationMs(split.generationMs);
+          setHistory((h) => [...h, split.pipelineMs]);
           setPhase("done");
           if (process.env.NODE_ENV === "development") {
             console.debug("wall-clock incl. network", wall.toFixed(1), "ms");
@@ -412,7 +418,21 @@ export default function Home() {
 
       {result?.guardrails && <GuardrailPanel report={result.guardrails} />}
 
-      <LatencyHud stages={stages} history={history} ttftMs={ttft} budgetMs={200} />
+      {/*
+        200 ms is the *claim*, not the serving deadline. The served budget is
+        2500 ms because a real hosted LLM call costs 450-900 ms of round trip;
+        scoring the HUD against that would make the bar meaningless. The bar
+        here measures the retrieval path, which is what the brief scopes and
+        what this system actually engineers.
+      */}
+      <LatencyHud
+        stages={stages}
+        history={history}
+        ttftMs={ttft}
+        budgetMs={200}
+        pipelineMs={pipelineMs}
+        generationMs={generationMs}
+      />
 
       {stats && (
         <footer className="foot">

@@ -1,3 +1,20 @@
+> # ⚠ SUPERSEDED
+>
+> This run measured the **first** index built: 622,699 chunks, `sentence_window`
+> chunking, `lsa:256` embeddings. Neither is what ships.
+>
+> It is kept, rather than deleted, because it is the evidence for two claims the
+> README makes about *why* the build changed:
+>
+> * `lsa:256` costs **20.3 ms P50 / 53.2 ms P100** per query encode, against
+>   0.2 / 1.0 ms for `static:minishlab/potion-base-8M`. That tail alone pushed
+>   retrieval past its slice of the budget and the verdict below is **P100
+>   215.8 ms — a FAIL**.
+> * `sentence_window` produced 3× the chunks of `recursive` for worse recall.
+>
+> The shipped numbers are in [`latency.md`](latency.md): P50 141.6 / P70 142.9 /
+> **P100 157.3 ms — PASS**.
+
 ### Latency
 
 Target: **< 200 ms** from transcript in to the **final** answer token (the brief's wording), measured over 200 warm runs across 2000 distinct queries.

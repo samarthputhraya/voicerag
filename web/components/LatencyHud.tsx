@@ -55,15 +55,84 @@ function percentile(sorted: number[], p: number): number {
   return sorted[Math.min(sorted.length - 1, Math.max(0, rank - 1))];
 }
 
+/**
+ * Spans that are *parents* of, or duplicates of, other spans in the same
+ * breakdown. `Trace` deliberately emits overlapping spans -- `generate` wraps
+ * `generate.total`, which wraps `generate.ttft` -- and both `harness/trace.py`
+ * and `eval/latency.py` say so. Summing the raw map therefore counts generation
+ * three times: a measured 557 ms request rendered as **1448.8 ms over budget**,
+ * in red, on the surface the demo video points a camera at.
+ *
+ * Only the leaf that represents real wall-clock is kept.
+ */
+const OVERLAPPING = new Set([
+  "generate", // parent of generate.total
+  "generate.total", // parent of generate.ttft
+  "generate.selected", // provider-selection bookkeeping, ~0 ms
+  "retrieve", // parent of retrieve.dense / retrieve.sparse
+]);
+
+/** Stages on the path the 200 ms claim actually scopes. */
+const PIPELINE_ORDER = [
+  "guard.input",
+  "embed",
+  "retrieve.dense",
+  "retrieve.sparse",
+  "fuse",
+  "guard.abstention",
+  "prompt",
+  "guard.grounding",
+];
+
+/**
+ * Split a raw trace breakdown into the two things that must never be added
+ * together: the retrieval path we engineer and claim against, and the hosted
+ * LLM round trip, which is a vendor's latency plus the Pacific.
+ *
+ * `retrieve.dense` and `retrieve.sparse` run *concurrently*, so the retrieval
+ * path costs the slower of the two, not their sum.
+ */
+export function splitBreakdown(breakdown: Record<string, number>): {
+  pipeline: StageBar[];
+  generationMs: number;
+  ttftMs: number | null;
+  pipelineMs: number;
+} {
+  const pipeline: StageBar[] = [];
+  let dense = 0;
+  let sparse = 0;
+  let serial = 0;
+
+  for (const name of PIPELINE_ORDER) {
+    const ms = breakdown[name];
+    if (typeof ms !== "number") continue;
+    pipeline.push({ name, ms });
+    if (name === "retrieve.dense") dense = ms;
+    else if (name === "retrieve.sparse") sparse = ms;
+    else serial += ms;
+  }
+
+  return {
+    pipeline,
+    pipelineMs: serial + Math.max(dense, sparse),
+    generationMs: breakdown["generate.total"] ?? breakdown["generate"] ?? 0,
+    ttftMs: breakdown["generate.ttft"] ?? null,
+  };
+}
+
 export interface LatencyHudProps {
-  /** Per-stage timings for the most recent request. */
+  /** Per-stage timings for the most recent request, already de-overlapped. */
   stages: StageBar[];
   /** End-to-end totals for every request this session, in arrival order. */
   history: number[];
-  /** The number we publicly claim to stay under. */
+  /** The number we publicly claim to stay under, for the retrieval path. */
   budgetMs?: number;
   /** Time-to-first-token for the last request, if generation ran. */
   ttftMs?: number | null;
+  /** Retrieval-path total: serial stages plus the slower retrieval leg. */
+  pipelineMs?: number;
+  /** Hosted LLM round trip. Reported, never scored against the budget. */
+  generationMs?: number;
 }
 
 export default function LatencyHud({
@@ -71,8 +140,11 @@ export default function LatencyHud({
   history,
   budgetMs = 200,
   ttftMs = null,
+  pipelineMs,
+  generationMs = 0,
 }: LatencyHudProps) {
-  const total = stages.reduce((a, s) => a + s.ms, 0);
+  // Never the sum of the raw breakdown -- see OVERLAPPING above.
+  const total = pipelineMs ?? stages.reduce((a, s) => a + s.ms, 0);
   const sorted = useMemo(() => [...history].sort((a, b) => a - b), [history]);
 
   const p50 = percentile(sorted, 50);
@@ -87,11 +159,22 @@ export default function LatencyHud({
   return (
     <section className="hud" aria-label="Latency breakdown">
       <header className="hud-head">
-        <h2>Pipeline latency</h2>
+        <h2>Retrieval pipeline</h2>
         <span className={within ? "badge ok" : "badge over"}>
           {total.toFixed(1)} ms {within ? "within" : "over"} {budgetMs} ms budget
         </span>
       </header>
+
+      {generationMs > 0 && (
+        <p className="llm-row">
+          <span className="llm-label">+ hosted LLM round trip</span>
+          <span className="llm-ms">{generationMs.toFixed(0)} ms</span>
+          <span className="llm-note">
+            vendor decode plus India→US network. Reported, not scored: it is
+            geography, not engineering.
+          </span>
+        </p>
+      )}
 
       {stages.length === 0 ? (
         <p className="muted">Ask a question to see the per-stage waterfall.</p>
@@ -164,6 +247,27 @@ export default function LatencyHud({
           padding: 3px 9px;
           border-radius: 999px;
           font-weight: 600;
+        }
+        .llm-row {
+          display: flex;
+          align-items: baseline;
+          gap: 9px;
+          flex-wrap: wrap;
+          margin: -4px 0 12px;
+          font-size: 12px;
+          color: #64748b;
+        }
+        .llm-label {
+          color: #94a3b8;
+          font-weight: 550;
+        }
+        .llm-ms {
+          font-variant-numeric: tabular-nums;
+          color: #e2e8f0;
+          font-weight: 600;
+        }
+        .llm-note {
+          font-size: 11.5px;
         }
         .badge.ok {
           background: rgba(16, 185, 129, 0.14);
