@@ -1,17 +1,268 @@
 # VoiceRAG — session handoff
 
-Paste this whole file into a new chat. It is written to be read cold.
+Paste this whole file into a new chat. It is written to be read cold: it assumes
+you know nothing about the project and have not seen the previous conversation.
 
-**Submission:** HH Goa 2026, Shortlisting Task 2 (Voice-Enabled RAG).
-**Deadline:** 22 Aug 2026. ~1000 teams, top ~50 qualify.
-**Repo:** https://github.com/samarthputhraya/voicerag (public, 11 commits)
-**Machine:** Windows 11, Python 3.12 in `.venv`, ~15.4 GB RAM (often <3 GB free),
-slow/flaky network, no Docker, portable Node at
+**Submission:** HH Goa 2026, Open Trial Task 2 (Voice-Enabled RAG).
+**Deadline:** 22 Aug 2026, 23:59 IST. Today is 18 Aug. ~1000 teams, ~50 seats.
+**Team:** 3 people. Every member must submit and pass — the team is the unit of
+selection, and it is all-or-nothing.
+**Repo:** https://github.com/samarthputhraya/voicerag — public, HEAD `6450768`,
+working tree clean, origin in sync.
+**Machine:** Windows 11, Python 3.12 in `.venv`, 15.4 GB RAM (often ~4 GB free),
+slow/flaky network, **no Docker**, portable Node at
 `C:\Users\samar\AppData\Local\nodejs-portable\node-v24.19.0-win-x64`.
+
+### The organisers' scoring criteria, in their order of weight
+
+1. **Task performance** — "how you actually solve the task. **This is the main
+   signal.**"
+2. **Proof of building** — "what you have built matters more than what you say."
+3. **Clear thinking** — "the ability to reason about problems worth solving."
+4. **Drive to be there.**
+
+### The brief's six requirements, and where they stand
+
+| # | Requirement | State |
+|---|---|---|
+| 1 | Speak the question — real voice-to-text, not typed | **Done.** Sarvam via a server-side WS relay. Verified end to end in a real browser, English and Hindi. |
+| 2 | Retrieval that's actually engineered — multiple chunking strategies | **Done.** 6 strategies + an ablation that *changed the build*. |
+| 3 | Blazing-fast — full pipeline under 200 ms | **Done, on the shipped index.** P100 157.3 ms. See §1 — this is the section that matters most. |
+| 4 | P50/P70/P100 benchmarked across real queries | **Done.** `reports/latency.md`, nearest-rank, same definition in Python and in the live HUD. |
+| 5 | Runs inside a real harness — retries, structured I/O, error recovery | **Done.** Error taxonomy, jittered retries, circuit breakers, Groq→OpenAI fallback. |
+| 6 | Guardrails that know when *not* to answer | **Done.** Input guard + abstention gate + grounding, all three verified refusing for different reasons. |
+| — | Public GitHub repo | **Done.** |
+| — | **Live working link** | **NOT DONE.** See §6 — two blockers fixed, three remain. |
+| — | **2 videos** | **NOT DONE.** |
+
+**506 tests pass, 1 skipped.** Frontend typecheck and production build clean.
 
 ---
 
-## 1. THE MICROPHONE BUG — found and fixed
+## 0. READ THIS FIRST — the state right now
+
+The system works. The demo has been driven end to end in a real browser this
+session, in English and Hindi, with the microphone, and every panel on screen
+has been checked against what the server actually sent.
+
+Two servers should be running for the demo:
+
+```powershell
+# API — loads the 197k index, ~20 s
+$env:PYTHONPATH="C:\Users\samar\OneDrive\Documents\voicerag\src"
+.\.venv\Scripts\python.exe -m uvicorn voicerag.api.main:app --host 127.0.0.1 --port 8000
+
+# Frontend
+$env:Path="C:\Users\samar\AppData\Local\nodejs-portable\node-v24.19.0-win-x64;$env:Path"
+cd web; npm run dev      # localhost:3000
+
+.\.venv\Scripts\python.exe -m pytest -q      # 506 passed, 1 skipped
+```
+
+**Endpoints:** `POST /ask` · `POST /ask/stream` (SSE) · `WS /stt/stream` (relay)
+· `POST /speak` (TTS) · `GET /examples` · `GET /healthz` · `GET /stats` ·
+`POST /speculate`
+
+### One environment hazard that will waste an hour if you hit it blind
+
+The repo lives in **OneDrive**, and OneDrive's sync fights webpack's file
+renames in `web/.next`. Twice this session the dev server silently served
+**unstyled HTML** — Times New Roman on white, no CSS at all — while still
+returning HTTP 200. If you ever see that, or see `_next/static/css/app/layout.css`
+404, the fix is always the same:
+
+```powershell
+# stop the dev server, then
+Remove-Item -Recurse -Force web\.next
+cd web; npm run dev
+```
+
+Never run `npm run build` and `npm run dev` against the same `.next` without
+clearing it in between, and never run two dev servers on this repo at once.
+
+---
+
+## 1. THE INDEX DECISION — the most important thing in this file
+
+There are **two** indexes on disk, and which one you serve decides whether the
+submission passes its own headline requirement.
+
+| | chunks | on disk | pipeline P100 | README describes it? |
+|---|---:|---:|---:|---|
+| `data/index_20k` ← **SHIPS** | 197,511 | ~540 MB | **157.3 ms** ✅ | **Yes** |
+| `data/index` | 956,128 | 2.6 GB | **283.3 ms** ❌ | No |
+
+`.env` now sets `INDEX_DIR=data/index_20k`. **Do not change it back.**
+
+For a period this session the API was serving the 956k build. That made the repo
+contradict itself in the two places a judge checks first — `README.md:72` says
+"197,511 chunks from 196,436 MSMARCO-XI passages", and the serving-recall row
+(R@10 **0.7202**) and the guardrail e2e run were both measured on the 197k
+index — *and* it failed requirement 3, which sits under criterion 1.
+
+### Why the big index is slower, measured
+
+The cost is **BM25, not the vector index**. Measured separately on the 956k
+build:
+
+| stage | P50 | P100 |
+|---|---:|---:|
+| dense (HNSW, m=32, ef_search=64) | **0.82 ms** | 1.49 ms |
+| **sparse (BM25, bm25s 0.3.10)** | **12.9 ms** | **73.4 ms** |
+
+And the spread tracks **posting-list length, not query length**:
+"how to print an excel sheet" costs 44 ms; "how to make hat on graduation cake
+pops", two words longer, costs 8.8 ms. bm25s 0.3.10 has no WAND pruning, so a
+common term means a long list to score. `n_threads` does not help (tested 1 / 4 /
+auto — no improvement; the existing code comment predicting this is correct).
+
+This is published as `reports/latency_956k.md` with a banner explaining it — the
+repo's **fourth negative result**, framed as the evidence for choosing the
+smaller index rather than a result being hidden. That habit of publishing what
+lost is the strongest thing this submission has; keep it.
+
+### Live latency on the shipped index
+
+Measured through the running API. Retrieval path = serial stages plus the slower
+retrieval leg, because dense and sparse run concurrently:
+
+**P50 11.6 ms · P70 12.7 ms · P100 17.7 ms**, against a 200 ms budget.
+
+`MMAP_SPARSE=false` is set and matters: memory-mapped BM25 page-faults on first
+touch, which cost ~100 ms and produced an outright *retrieval timeout* on the
+first question after a restart.
+
+---
+
+## 2. What was fixed this session
+
+Seven commits, all pushed. Each defect was found by a multi-specialist audit,
+verified against the code, and confirmed in a real browser before shipping.
+
+### `d49f0c0` — the demo was undermining itself on screen
+
+- **The voice read the citation markers aloud.** `playAnswer` sent the answer
+  verbatim to Sarvam, so "…neuropathy [1][3]" was spoken as *"one three"*.
+  `speakable()` in `web/lib/api.ts` strips markers and bracketed notes, applied
+  **inside** `playAnswer` so both the auto-play and the Replay button are
+  covered. Stripped for speech only, never from the screen — the markers are the
+  visible link to the numbered Sources. Verified at the network layer, by
+  recording the actual `/speak` request body.
+- **Citation numbers pointed at the wrong boxes.** The server returns citations
+  in first-appearance order but carries no original index, so labelling by array
+  position made an answer citing `[3][4]` point at boxes labelled `[1]`/`[2]`.
+  Labels are now re-derived from the answer's own markers.
+- **Three panels asserted things about data they did not have.** The Input
+  guardrail card was blank on every successful request (`input_reason` is `None`
+  when allowed). The Answer card reprinted the refusal sentence verbatim,
+  because on every abstained path the response `answer` *is* `abstain_reason` —
+  it now shows the abstention gate's confidence instead. And
+  `grounding_score !== undefined` never fired, because the API sends JSON
+  `null`, so a skipped check rendered as a green "0%" captioned "every claim
+  traced to a passage".
+- **The HUD claimed "0.0 ms within 200 ms budget" in green before any question**
+  (`pipelineMs ?? …` cannot fall through — `0` is not nullish), and kept the
+  previous request's waterfall during "thinking" and forever after an error, so
+  a red error banner sat above a green verdict describing a different question.
+- Plus: seconds of dead air with no loading state; "Speaking" animating for the
+  ~1.4 s of synthesis before any audio existed; muting mid-synthesis not muting;
+  the footer reading "answered by none" exactly when the demo was degraded; and
+  disabling the focused input, which ejects keyboard focus to `<body>` after
+  every typed question — on the path that exists for a judge on a managed
+  browser.
+
+### `edb4331` — scraped navigation furniture shown as evidence
+
+MS MARCO passages are scraped pages. Captured verbatim from the live Sources
+panel: an A-Z index strip (`a b c d e f g …`), bare source URLs, and a "related
+questions" rail flattened into one dash-run. A full store scan found **136**
+alphabet-run chunks, **419** starting with a URL, **8,550** containing one.
+
+Cleaned in `src/voicerag/snippets.py`, applied in `_citations`. **Provably
+display-only:** `_contexts` returns `(chunks, prompt_texts)`; the model is
+prompted with `prompt_texts` and grounding verifies against `prompt_texts`, so
+nothing but a renderer reads the cleaned field. The cleaner returns the original
+text if cleaning would remove more than three quarters of it — blanking a
+citation is far worse than showing a scruffy one, because the `[n]` marker in
+the answer has to point at something. Tests are built from strings that were
+actually on screen, not invented fixtures.
+
+### `d99959f` — grounding refused answers the corpus supports
+
+`reports/guardrails_e2e.json` shows **6 of 9 refusals on gold-answerable
+questions came from grounding**, three at scores of **0.9219 / 0.6439 / 0.5814**
+— above every threshold. Two causes, both fixed **without lowering any
+threshold**:
+
+1. **Cited passages were tested one at a time.** `SYSTEM_PROMPT` rule 2 tells the
+   model *"You MAY combine facts stated across passages"*, and the checker then
+   vetoed exactly that — a sentence synthesised from two passages fails against
+   both halves, because neither alone carries 35% of the combined sentence's
+   content words. Multi-citation claims are now scored against the **union** of
+   what they cite. Measured on a true synthesis case: **0.500 → 1.000**. The
+   same claim citing only one passage is still correctly refused.
+2. **Grounding did not stem, but the retriever does.** The BM25 index is built
+   with `{"stemmer": "english"}`, so a passage is retrieved because
+   `anticonvulsants` matches `anticonvulsant` — and grounding then compared raw
+   surface forms and called the answer unsupported, on one inflectional `s`.
+   Grounding was stricter than the retrieval that found the evidence, which is
+   not a defensible place for the two to disagree. `_tokens` now applies the
+   same Snowball stemmer, symmetrically to claim and context.
+
+**Safety was re-checked, not assumed:** fabrication, fabricated numbers,
+unsupported single citations and invalid citation indices are all still refused;
+an out-of-corpus question still abstains at the gate; a request for synthesis
+instructions is still blocked at the input guard. Cost: grounding p50
+0.222 → 0.282 ms.
+
+### `268dff7` — an idle microphone is not a failure
+
+Observed: a red banner reading *"Speech recognition failed: relay:
+ConnectionClosedError: received 1008 (policy violation) Inactivity timeout"* —
+once sitting **directly above a correct, fully grounded, fully cited answer**.
+
+Sarvam ends an idle realtime session after 60 s with
+`{code: "inactivity_timeout", is_fatal: true, status_code: 408}`. The browser
+VAD deliberately keeps the mic open after a question so the next one needs no
+click, so this fires on *every* session where you ask once and then listen to
+the answer. Two layers were reporting it: the relay's catch-all marked every
+upstream exception fatal (`_is_benign_close` now separates an idle close from a
+transport fault; a genuine 1011 is still reported), and Sarvam's own frame is
+marked fatal by the vendor, so the client downgrades `inactivity_timeout`
+rather than rendering it. Reproduced and verified: ask by voice, sit idle 85 s,
+no banner.
+
+### `930218b` — benchmark the configuration we actually serve
+
+Two methodology defects:
+
+- `scripts/bench_latency.py` called `HybridIndex.load(directory)` bare, taking
+  `mmap_sparse=True`, while `api/state.py` passes `Settings.mmap_sparse`. **The
+  published numbers measured a configuration the deployment does not run** — and
+  measured the slower one.
+- The simulated-run banner asserted *"No LLM credentials were available"*
+  whenever generation was modelled, which is false any time the run was
+  simulated deliberately with a key present. The reason is now plumbed through
+  and stated accurately.
+
+### `6450768` — the container could not boot
+
+`pyproject` is src-layout (`where = ["src"]`), the Dockerfile does
+`COPY src/ ./src/`, and there is **no `pip install -e .` and no `PYTHONPATH`**.
+The build-time ingest step survives only because `scripts/_bootstrap.py` patches
+`sys.path`; the `CMD` has no such rescue — so the image builds cleanly and then
+crash-loops on `ModuleNotFoundError: voicerag`. Fixed with `PYTHONPATH=/app/src`.
+
+The runtime `ENV` block also named only six settings, so everything else fell
+back to `config.py` defaults — which are the *benchmark* values, not the serving
+ones: `BUDGET_TOTAL_MS=2500` (vs 8000 in `.env`) and `MAX_TOKENS=80` (vs 160).
+`.env` records what each does to a live answer: **truncated mid-sentence, with
+citations still attached.** A judge would have read a confidently-cited
+fragment. Both are now set explicitly in the image.
+
+---
+
+## 3. THE MICROPHONE BUG — root cause, for the record
 
 The mic failed for three rounds. The root cause was a **module-resolution
 mismatch inside onnxruntime-web**, and it is worth understanding because it
@@ -133,7 +384,7 @@ merely whether the file exists at the path you expect.
 
 ---
 
-## 1b. DEMO-POLISH PASS — what a judge perceives
+## 4. Earlier demo-polish pass (superseded in part by §2)
 
 A five-specialist audit swept the frontend, retrieval, guardrails, API and repo.
 The defects below were all confirmed against code and then fixed and verified in
@@ -237,117 +488,158 @@ question after a restart.
 
 ---
 
-## 2. What the system is
+## 5. Things that are NOT bugs — verified, do not "fix" these
 
-Voice-enabled RAG over `ai4bharat/MSMARCO-XI`. Speak or type a question → STT →
-hybrid retrieval → guardrails → LLM → grounded, cited answer, spoken back, with
-a per-stage latency receipt.
+Each of these looked like a defect and was investigated. All are correct
+behaviour. Re-investigating them is wasted time you do not have.
 
-**Serving now:** `data/index` — **956,128 chunks from 950,526 passages**,
-`recursive` chunking, `static:minishlab/potion-base-8M` (dim 256), 2.6 GB on
-disk. Built from the full 97,941-row Hindi validation shard in 234 s.
-
-### Run it
-
-```powershell
-# API  (loads ~2.6GB index, takes ~45s)
-$env:PYTHONPATH="C:\Users\samar\OneDrive\Documents\voicerag\src"
-.\.venv\Scripts\python.exe -m uvicorn voicerag.api.main:app --host 127.0.0.1 --port 8000
-
-# Frontend
-$env:Path="C:\Users\samar\AppData\Local\nodejs-portable\node-v24.19.0-win-x64;$env:Path"
-cd web; npm run dev      # localhost:3000
-
-.\.venv\Scripts\python.exe -m pytest -q          # 496 pass, 1 skipped
-```
-
-### Endpoints
-
-`POST /ask` · `POST /ask/stream` (SSE) · `WS /stt/stream` (relay) ·
-`POST /speak` (TTS) · `GET /examples` · `GET /healthz` · `GET /stats` ·
-`POST /speculate`
+- **"What's today's date?" and "Who is the Prime Minister of India?" decline.**
+  Both are outside the indexed MS MARCO slice. The abstention gate refusing is
+  requirement 6 working.
+- **"How is caffeine metabolized?" declines**, even though it is one of the
+  example chips and MS MARCO labels it `answerable: True`. Its gold answer in
+  the dataset is about *"fat burning supplements … increase metabolism"* — not
+  the biochemistry the question asks. The model reads the retrieved passages and
+  judges them insufficient, which is correct. This is a dataset-quality artifact,
+  not a retrieval bug. **Consequence for filming: do not use this chip on
+  camera.** The other five answer well (grounding 0.52–1.00).
+- **Cleaning the passages the *model* reads changes nothing.** Hypothesis was
+  that scraped junk in the prompt was causing self-abstention. A/B tested
+  through the real model, three runs each: RAW and CLEANED produce a
+  byte-identical answer. The display-only cleaning in `edb4331` is the right
+  scope; do not extend it into the prompt path.
+- **`n_threads` on BM25 does not help.** Tested 1 / 4 / auto. The existing code
+  comment explaining why is correct.
+- **Citation scores render as `0.033`.** These are correct RRF values, bounded
+  to `[1/61, 2/61]`. They read as "3% match" on camera, which is a presentation
+  problem worth considering, but the numbers are right.
 
 ---
 
-## 3. Requirement status
+## 6. WHAT IS LEFT — in priority order
 
-| # | Requirement | State |
-|---|---|---|
-| 1 | Sarvam **or** ElevenLabs STT | Both implemented. Sarvam via server-side relay. Browser leg fixed and **observed working end to end** (§1). |
-| 2 | "Vast" chunking | 6 strategies + real ablation that *changed the build*. Done. |
-| 3 | <200 ms | P50 141.6 / P70 142.9 / **P100 157.3 ms** with modelled decode. Retrieval path 7.3 ms P50 fully measured. |
-| 4 | P50/P70/P100 | `reports/latency.md`, nearest-rank, same definition in Python and the HUD. Done. |
-| 5 | Harness | Error taxonomy, jittered retries, circuit breakers, Groq→OpenAI fallback. Done. |
-| 6 | Guardrails | 4 stages. 9/9 adversarial probes refused. Done. |
-| — | Public GitHub repo | Done. |
-| — | **Live working link** | **NOT DONE.** Deploy chain fixed but never run. |
-| — | **2 videos** | **NOT DONE.** |
+### 7.1 The live link (required deliverable, does not exist)
 
----
+Two blockers were fixed in `6450768` (container could not import `voicerag`;
+serving config would truncate answers). **Three remain:**
 
-## 4. Key measurements (all real, reproduce with the commands in the repo)
+1. **`CORS_ORIGINS` is unset in the image.** It needs the real deployed origin.
+   Know the failure mode before it bites: **the mic button lights, the waveform
+   moves, and no transcript ever arrives** — because
+   `stt_relay._origin_allowed()` closes the WS upgrade with code 1008 and logs
+   `stt relay refused origin`. **That is not a VAD bug.** A real bug did live in
+   the ONNX loader (commit `20464a5`) and it is fixed; do not go back there.
+   Read the deploy log for `stt relay refused origin` first, every time.
+2. **No rate limiter.** `grep -rniE "ratelimit|rate_limit|slowapi|limiter"
+   src/` returns nothing. The public link holds live Sarvam and Groq
+   credentials on a shared **8,000 tok/min** free tier. One scraper during
+   judging exhausts the quota and the demo dies. Needed on `/ask`,
+   `/ask/stream`, `/speak`, `/speculate`. The relay already caps session
+   duration (`_MAX_SESSION_S = 120.0`) and origin, but the REST endpoints are
+   open to curl.
+3. **The frontend is not in the image.** As committed, the "live link" would be
+   a bare JSON endpoint. Either serve `web/` from the same origin as the API
+   (which also makes CORS and the microphone work with no extra config), or
+   deploy the frontend separately and set `CORS_ORIGINS` to that origin.
 
-**Latency**, 200 warm runs from a 2,000-query pool, `reports/latency.md`:
+Target: **Hugging Face Space** (free, 16 GB RAM). `deploy/huggingface/push_space.ps1`
+already defaults to `-IndexRows 20000`, which matches the shipped index — no
+script change needed. Render's `starter` is 512 MB and would OOM.
 
-| Stage | P50 | P100 |
-|---|---:|---:|
-| embed | 0.2 ms | 1.0 ms |
-| retrieve | 6.8 ms | 22.6 ms |
-| guards + prompt | ~0.3 ms | ~1 ms |
-| generate *(modelled)* | 134 ms | 149.6 ms |
+**This needs your Hugging Face token and a Space under your account. It cannot
+be done without your credentials.**
 
-Real Groq from India: **0.5–4.4 s wall clock** (~14 ms of Groq compute; the rest
-is trans-Pacific RTT). Serving budget is therefore `BUDGET_TOTAL_MS=8000`. The
-200 ms figure is a benchmark target `bench_latency.py` passes explicitly.
+### 7.2 Two videos (required deliverable, do not exist)
 
-**Chunking ablation** (`reports/ablation.md`), 19,878 passages / 400 queries:
-`recursive` 0.5628 nDCG@10 > metadata > contextual > fixed > semantic >
-`sentence_window` 0.5133. The index originally shipped with the **worst** one;
-the ablation is why it was rebuilt.
+Suggested shape, using only verified-answerable questions:
 
-**Serving-scale retrieval** (196k-passage index, 400 queries): R@10 **0.7202**,
-nDCG@10 0.4321. *Not* the 0.9070 from the reduced-scale comparison — both are in
-the README, labelled.
+- **Video 1 — the product.** Speak "Can gabapentin treat neuropathy?" → watch
+  partials stream → grounded cited answer → spoken back. Then switch the
+  language selector to हिन्दी and ask the same thing in Hindi: **partials render
+  in Devanagari, the final transcript arrives in English** (Sarvam
+  `mode=translate`), and the answer is spoken back in Hindi. That switch is the
+  single most distinctive 20 seconds available.
+- **Video 2 — the engineering.** The chunking ablation that changed the build;
+  the live P50/P70/P100 HUD matching `reports/latency.md`; then three refusals
+  that each fail for a **different** reason — a harmful request (input guard),
+  an out-of-corpus question (abstention gate), and the labelled-unanswerable
+  chip (now correctly declining again on the 197k index).
 
-**Groq free tier: 8,000 tokens/min** ≈ 4 RAG questions/minute. This is a live
-demo risk. `OPENAI_API_KEY` is wired and tested as fallback but **the user has
-not yet supplied the key**.
+Do a full dry run first: Groq's 8k tok/min ceiling intermittently produces
+"Every generation provider failed", and you do not want that mid-take.
 
----
+### 7.3 Get an OpenAI key in
 
-## 5. Things that were broken and are now fixed (do not regress these)
+`OPENAI_API_KEY` is wired and tested as a fallback but **has never been
+supplied**. Groq's free tier is ~4 RAG questions/minute. This is the single
+biggest live-demo risk after the link itself.
 
-1. **`asyncio.sleep()` vs Windows' 15.6 ms timer tick** inflated a 3.4 ms
-   simulated token stream to 211 ms. `eval/latency.py` now uses deadline-based
-   sleeping. Accurate to ±0.03 ms.
-2. **Sarvam accepts no `token` query param and mints no ephemeral credential.**
-   The browser was sending a self-signed capability Sarvam ignores. Fixed with
-   `WS /stt/stream`, a server-side relay.
-3. **`lsa:256` embed cost 20.3 ms P50** and blew the retrieval budget. Swapped
-   for `static:minishlab/potion-base-8M` at 0.2 ms — **~320×**. Also removed the
-   45-minute SVD fit; rebuilds now take 93 s–234 s.
-4. **System prompt banned reading comprehension** ("never infer beyond what is
-   written"), so the model refused questions whose answers were in the retrieved
-   passages. Rewritten.
-5. **Abstention prior rules were authored before any index existed.** Measured:
-   `top1_agree` separation **0.000**, `rel_gap` **negative**, `max_score` is
-   RRF-bounded noise, and `dense_max` — the only real signal — was thresholded
-   at 0.30 against a live range of 0.54–0.86, so it never fired. Recalibrated to
-   3 rules; balanced accuracy **0.499 → 0.912**.
-6. **Grounding tokenised with `[a-z0-9]+`**, so a fabricated Devanagari answer
-   tokenised to `[]` and was certified `grounded=True, score=1.0`. The
-   hallucination check *inverted* on the corpus's own scripts.
-7. **HUD summed overlapping trace spans** — showed **1621 ms** for a 557 ms
-   request, in red. Now 4.16 ms retrieval path, LLM reported separately.
-8. **`.env.example` shipped `BUDGET_TOTAL_MS=200`** while the README says
-   `cp .env.example .env` — every answer truncated after one word.
-9. **No TTS existed at all.** Added `POST /speak` (Sarvam `bulbul:v2`).
-10. **Test fixture asserted `dense_max≈0.28`** while the real embedder produces
-    **0.73** — thresholds tuned to reality looked broken in tests.
+### 7.4 Smaller, if time
+
+- Guardrail bypasses that evade the "how do I" anchor (e.g. *"steps to
+  synthesise…"*, *"for a novel I'm writing…"*).
+- Indirect prompt injection: nothing sanitises retrieved passage text before it
+  enters the prompt.
+- Multilingual evasion: the input guard sees English only *after* Sarvam
+  translate, so a harmful request spoken in Hindi may reach retrieval before it
+  is checked. **Worth testing before the link is public.**
 
 ---
 
-## 6. The multilingual angle (a genuine differentiator)
+## 7. The verification harness — how any of this was proven
+
+Earlier sessions had no microphone and no browser automation, so every voice fix
+was reasoned from library source and never watched running. That gap is closed,
+and the technique is worth keeping because it is what turns "should work" into
+"observed working".
+
+Chrome is driven over the **DevTools Protocol** (no Playwright/Puppeteer
+install needed — just `websockets` from the venv and the Chrome already on the
+machine). Audio is injected by replacing `navigator.mediaDevices.getUserMedia`
+via `Page.addScriptToEvaluateOnNewDocument` with a
+`MediaStreamAudioDestinationNode` fed from a decoded WAV. Everything downstream
+of `getUserMedia` — the AudioWorklet, the Silero VAD, the frame stream, the
+relay, Sarvam, retrieval, guardrails, the HUD — is the real application.
+
+Scratch harness lives in the session scratchpad (throwaway, not in the repo):
+`cdp.py` (CDP driver), `t5_e2e_inject.py` (full voice path), `t7_fix_verify.py`
+(records the actual `/speak` body + every panel), `t9_idle_ui.py` (the 85 s idle
+test), `shot.py` (screenshots).
+
+**A trap worth recording:** Chrome's own
+`--use-file-for-fake-audio-capture` was tried first and does not work here. Its
+fake device opens at **44100 Hz stereo**, and `FileSource` silently plays
+*silence* for any file that does not match — indistinguishable from a microphone
+that hears nothing. Injecting at `getUserMedia` avoids the whole problem.
+
+---
+
+## 8. Honest assessment
+
+The engineering is strong and unusually well-measured: six chunking strategies
+with an ablation that *changed the build*, a guardrail chain with published
+negative results, a resilience harness with real failover, a latency story with
+the modelled and measured parts cleanly separated, and now a fourth negative
+result explaining why the bigger index does not ship. **506 tests pass.** The
+demo has been observed working end to end in a real browser, in two languages,
+on both a dev server and a production build.
+
+What is weak is entirely **delivery, not engineering**: the live link and the
+two videos do not exist, and they are required. A judge sees the demo and reads
+the repo; they do not run the test suite.
+
+The recurring theme, and it caught this session too: **the docs are repeatedly
+more optimistic than the code, and the artifacts drift from the config that
+actually serves.** This session alone found the benchmark measuring a different
+`mmap_sparse` than the server, a report claiming credentials were unavailable
+when they were not, an image whose defaults would truncate every answer, and the
+API serving an index the README does not describe. Every number in the README
+should stay traceable to an artifact in `reports/`, and every artifact should
+state the configuration it was measured under. That discipline is the strongest
+thing this submission has — it is also the thing most likely to quietly rot in
+the last four days.
+
+## 9. The multilingual angle (a genuine differentiator)
 
 **Do not try to embed Indic text.** Measured: `potion-base-8M` holds 70
 Devanagari tokens, all bare single characters. `कॉर्पोरेशन क्या है?` tokenises
@@ -361,7 +653,7 @@ never reaches the embedder. Measured *faster* than transcribing (945 ms vs
 
 ---
 
-## 7. Dataset facts (checked, do not re-download blindly)
+## 10. Dataset facts (checked, do not re-download blindly)
 
 `ai4bharat/MSMARCO-XI` is **55.62 GB / 30 files**. 14 validation shards
 (97,941 rows each) + 13 train shards. **No test split.**
@@ -380,46 +672,3 @@ The repo's own README lists filenames that don't exist (`gutrain`, `orval`,
 tens of minutes).
 
 ---
-
-## 8. What to do next, in priority order
-
-1. ~~Fix the microphone.~~ **Done and verified in a real browser** (§1), in
-   English and Hindi, on both a dev server and a production build. Worth one
-   confirming click on real hardware — the verification injected audio at
-   `getUserMedia`, so the app below that boundary is fully exercised but a
-   physical capture device is not.
-2. **Deploy the live link** — a required deliverable, currently missing. All six
-   known blockers are fixed (`.dockerignore`, `model2vec` in requirements, env
-   vars un-prefixed, `INDEX_URL`/`INDEX_ROWS` build args, correct baked model,
-   uvloop flags dropped). Never actually built — no Docker locally. Script ready
-   at `deploy/huggingface/push_space.ps1` (HF Space, free, 16 GB RAM — Render's
-   `starter` is 512 MB and would OOM on a ~2.6 GB index; consider rebuilding at
-   `--limit 20000` for a smaller deploy).
-3. **Get the OpenAI key in** — Groq's 8k tok/min will break a live demo.
-4. **`MMAP_SPARSE=false`** — `retrieve.sparse` was **98 ms** on the larger index
-   (memory-mapped BM25 faulting). This is now the dominant retrieval cost.
-5. **Videos** (2 required).
-6. Remaining audit items: guardrail bypasses that evade the `how do I` anchor
-   (e.g. *"steps to synthesise…"*), a per-IP rate limiter before the link goes
-   public, and citations rendering as `0.033` (correct RRF values, bounded to
-   `[1/61, 2/61]`, but they read as "3% match" on camera).
-
----
-
-## 9. Honest assessment
-
-The engineering is strong and unusually well-measured — six chunking strategies
-with an ablation that *changed the build*, a guardrail chain with a published
-negative result, a resilience harness with real failover, and a latency story
-with the modelled and measured parts clearly separated. 496 tests pass.
-
-What is weak: **the demo has never been seen working by a human through a
-browser microphone**, and two required deliverables (live link, videos) do not
-exist. A judge sees the demo, not the test suite. Fix the mic, ship the link,
-film it — in that order.
-
-A recurring theme worth carrying forward: on this project, *the docs were
-repeatedly more optimistic than the code*. Several README claims, several
-config comments, and one test fixture all asserted things the system did not do.
-Every number in the README is now traceable to an artifact in `reports/`. Keep
-it that way — it is the strongest thing this submission has.
