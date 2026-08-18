@@ -158,9 +158,51 @@ _NUM_WORDS: dict[str, str] = {
 }
 
 
+def _stemmer() -> Any:
+    """The Snowball English stemmer, or ``None`` when PyStemmer is absent.
+
+    Cached on the function object: constructing a Stemmer is cheap but not
+    free, and this runs per claim per passage inside the request path.
+    """
+    cached = getattr(_stemmer, "_cache", "unset")
+    if cached != "unset":
+        return cached
+    try:  # pragma: no cover - exercised by whichever branch the env provides
+        import Stemmer  # type: ignore[import-untyped]
+
+        cached = Stemmer.Stemmer("english")
+    except Exception:
+        cached = None
+    _stemmer._cache = cached  # type: ignore[attr-defined]
+    return cached
+
+
 def _tokens(text: str) -> list[str]:
-    """Lowercased alphanumeric tokens with stopwords removed."""
-    return [t for t in _WORD.findall(text.lower()) if t not in _STOP]
+    """Lowercased alphanumeric tokens, stopped and stemmed.
+
+    Stemmed **because the retriever stems**. The served BM25 index is built
+    with ``{"stemmer": "english"}``, so a passage is retrieved on the strength
+    of ``anticonvulsants`` matching a question about an ``anticonvulsant`` --
+    and grounding then compared the raw surface forms and called the resulting
+    answer unsupported. Measured: "Gabapentin is an anticonvulsant [1]" against
+    a passage reading "in a class of medications called anticonvulsants" scored
+    0.50 against a 0.55 bar and was refused, on a single inflectional ``s``.
+
+    Grounding was therefore stricter than the retrieval that found the
+    evidence, which is not a defensible place for the two to disagree. Using
+    the same Snowball stemmer the index uses makes the two consistent. It is
+    applied symmetrically to claim and context, so it can only merge
+    morphological variants of the same word -- it cannot invent support between
+    unrelated ones.
+
+    Degrades to unstemmed tokens if PyStemmer is unavailable, since it arrives
+    transitively via ``bm25s`` rather than as a declared dependency.
+    """
+    raw = [t for t in _WORD.findall(text.lower()) if t not in _STOP]
+    stem = _stemmer()
+    if stem is None:
+        return raw
+    return list(stem.stemWords(raw))
 
 
 def _normalise_number(raw: str) -> str:
@@ -518,6 +560,34 @@ class GroundingChecker:
             if score > best_score or best_i is None:
                 best_i, best_score, best_cov, best_lcs = i, score, cov, lcs
 
+        # A claim citing several passages asserts that they support it
+        # TOGETHER -- which is precisely what SYSTEM_PROMPT rule 2 instructs
+        # ("You MAY combine facts stated across passages"). Scoring it only
+        # against the best SINGLE passage measured something the model was
+        # never asked to do: a correctly synthesised sentence drawing half its
+        # content from each of two passages scores ~0.50 against a 0.55 bar and
+        # is refused, with both halves individually "unsupported".
+        #
+        # So the union of the cited passages becomes an additional scoring
+        # candidate. Note what this does NOT do: it does not lower
+        # claim_threshold, and it does not apply to uncited or single-citation
+        # claims. It fixes what the threshold is measured against, which is the
+        # actual defect -- a weakened bar would have let fabrication through.
+        cited_idx = [c - 1 for c in dict.fromkeys(cites) if 1 <= c <= len(ctx_toks)]
+        if len(cited_idx) > 1:
+            union_toks: list[str] = []
+            for i in cited_idx:
+                union_toks.extend(ctx_toks[i])
+            if union_toks:
+                cov = len(claim_set & set(union_toks)) / len(claim_set)
+                lcs = _lcs_length(claim_toks, union_toks) / len(claim_toks)
+                score = cfg.coverage_weight * cov + (1.0 - cfg.coverage_weight) * lcs
+                if score > best_score:
+                    # best_i deliberately keeps pointing at the best real
+                    # passage: it is reported as best_context/best_chunk_id and
+                    # must stay a citable index, not a synthetic union.
+                    best_score, best_cov, best_lcs = score, cov, lcs
+
         reasons: list[str] = []
         bad_numbers: tuple[str, ...] = ()
         if cfg.check_numbers:
@@ -537,15 +607,47 @@ class GroundingChecker:
                     "cites passage " + ", ".join(f"[{c}]" for c in invalid)
                     + f" but only {len(ctx_toks)} passage(s) were retrieved"
                 )
-            unsupported_cites = tuple(
-                c for c in cites
-                if c not in invalid and per_ctx_cov[c - 1] < cfg.citation_support_threshold
-            )
-            if unsupported_cites:
-                reasons.append(
-                    "cites " + ", ".join(f"[{c}]" for c in unsupported_cites)
-                    + ", which does not contain this statement"
+            valid = [c for c in cites if c not in invalid]
+            if len(valid) > 1:
+                # A claim citing several passages is asserting that they support
+                # it *together*, which is exactly what SYSTEM_PROMPT rule 2 asks
+                # the model to do ("You MAY combine facts stated across
+                # passages"). Testing each cited passage on its own therefore
+                # vetoed the behaviour we instruct: a sentence synthesised from
+                # two passages fails both halves, because neither alone carries
+                # 35% of the combined sentence's content words.
+                #
+                # Measured on reports/guardrails_e2e.json: this veto produced 6
+                # of the 9 refusals on gold-answerable questions, three of them
+                # at grounding scores of 0.92, 0.64 and 0.58 -- above every
+                # threshold, refused on this check alone. That is the "I drafted
+                # an answer but 1 statement(s) weren't supported" the demo was
+                # showing on questions the corpus answers.
+                #
+                # The check is not weakened, only asked the right question:
+                # cited passages must *collectively* contain the claim. A
+                # single-citation claim is still tested against that one
+                # passage, and the number and validity checks are untouched.
+                union: set[str] = set()
+                for c in valid:
+                    union |= set(ctx_toks[c - 1])
+                union_cov = len(claim_set & union) / len(claim_set)
+                if union_cov < cfg.citation_support_threshold:
+                    unsupported_cites = tuple(valid)
+                    reasons.append(
+                        "cites " + ", ".join(f"[{c}]" for c in valid)
+                        + ", which together do not contain this statement"
+                    )
+            else:
+                unsupported_cites = tuple(
+                    c for c in valid
+                    if per_ctx_cov[c - 1] < cfg.citation_support_threshold
                 )
+                if unsupported_cites:
+                    reasons.append(
+                        "cites " + ", ".join(f"[{c}]" for c in unsupported_cites)
+                        + ", which does not contain this statement"
+                    )
 
         hard_fail = bool(bad_numbers or invalid or unsupported_cites)
         supported = best_score >= cfg.claim_threshold and not hard_fail
