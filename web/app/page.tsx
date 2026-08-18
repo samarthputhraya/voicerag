@@ -21,7 +21,7 @@
  * file — see the comment there.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMicVAD } from "@ricky0123/vad-react";
 import type { RealTimeVADOptions } from "@ricky0123/vad-web";
 
@@ -30,6 +30,7 @@ import {
   fetchExamples,
   fetchStats,
   speak,
+  speakable,
   speculate,
   streamAnswer,
   type Citation,
@@ -175,8 +176,21 @@ export default function Home() {
   // change; a ref keeps `ask` out of the dependency churn.
   const voiceOnRef = useRef(true);
   const [speaking, setSpeaking] = useState(false);
+  // Synthesis is ~1.4 s of Sarvam round trip BEFORE any audio exists. One
+  // boolean for both states made the UI claim "Speaking" over silence, which
+  // on camera reads as broken audio rather than as latency.
+  const [synthesising, setSynthesising] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
+  /**
+   * Generation token for speech. `playAnswer` awaits synthesis for ~1.4 s and
+   * then played unconditionally — so muting (or asking again) during that
+   * window revoked nothing, and the superseded audio arrived late and spoke
+   * anyway, with no control left on screen to stop it. Every interruption
+   * bumps the sequence; a synthesis that comes back to a stale sequence
+   * discards its audio instead of playing it.
+   */
+  const speakSeqRef = useRef(0);
   /**
    * The streamed answer, readable from inside the `onFinal` closure.
    * `answer` state is stale there because the closure captured it before the
@@ -212,14 +226,20 @@ export default function Home() {
 
   // --- answer path ----------------------------------------------------------
 
-  /** Stop any answer currently being spoken and release its blob URL. */
+  /**
+   * Stop any answer being spoken — or still being synthesised — and release
+   * its blob URL. Bumping the sequence first is what actually cancels an
+   * in-flight synthesis; pausing the audio element only handles playback.
+   */
   const stopSpeaking = useCallback(() => {
+    speakSeqRef.current += 1;
     audioRef.current?.pause();
     audioRef.current = null;
     if (audioUrlRef.current) {
       URL.revokeObjectURL(audioUrlRef.current);
       audioUrlRef.current = null;
     }
+    setSynthesising(false);
     setSpeaking(false);
   }, []);
 
@@ -232,13 +252,22 @@ export default function Home() {
    */
   const playAnswer = useCallback(
     async (text: string) => {
+      // Strip citation markers and bracketed notes: they are for the eye.
+      // "…treats neuropathy [1][3]" must not be read as "one three".
+      const body = speakable(text);
+      if (!body) return;
       stopSpeaking();
-      setSpeaking(true);
-      const url = await speak(text, language === "auto" ? "en-IN" : language);
-      if (!url) {
-        setSpeaking(false);
+      const seq = speakSeqRef.current;
+      setSynthesising(true);
+      const url = await speak(body, language === "auto" ? "en-IN" : language);
+      // Superseded while we waited (mute, a new question, another Replay):
+      // discard rather than talk over whatever superseded us.
+      if (seq !== speakSeqRef.current) {
+        if (url) URL.revokeObjectURL(url);
         return;
       }
+      setSynthesising(false);
+      if (!url) return;
       audioUrlRef.current = url;
       const audio = new Audio(url);
       audioRef.current = audio;
@@ -246,6 +275,7 @@ export default function Home() {
       audio.onerror = () => stopSpeaking();
       try {
         await audio.play();
+        setSpeaking(true);
       } catch {
         // Autoplay policy blocks playback until the page has been interacted
         // with. Every path here follows a click or a spoken question, so this
@@ -280,6 +310,13 @@ export default function Home() {
       setCitations([]);
       setResult(null);
       setError(null);
+      // Clear the HUD too. Leaving it populated showed the PREVIOUS request's
+      // waterfall and "within budget" badge while this one was still
+      // retrieving — and left them up forever beside an error banner, a green
+      // verdict describing a different question.
+      setStages([]);
+      setPipelineMs(0);
+      setGenerationMs(0);
       setPhase("thinking");
 
       abortRef.current = streamAnswer(q, language, {
@@ -292,7 +329,11 @@ export default function Home() {
           const wall = performance.now() - clockRef.current;
           setResult(res);
           setCitations(res.citations);
-          if (res.abstained) setAnswer(res.answer);
+          // Unconditional: res.answer is the authoritative text on EVERY exit
+          // path. The raw token stream can differ from it — the server strips
+          // a leading "ANSWER:" echo and appends a truncation note on a
+          // deadline exit — and keeping the stream on screen hid both.
+          setAnswer(res.answer);
           // Never sum res.trace.breakdown: it carries deliberately overlapping
           // spans (generate wraps generate.total wraps generate.ttft), and
           // retrieve.dense/retrieve.sparse run concurrently. splitBreakdown
@@ -311,9 +352,9 @@ export default function Home() {
           // ~1.4 s, and blocking the answer on it would spend the time-to-first-
           // token we optimised hardest for. The refusal text is spoken too — a
           // system that only talks when it succeeds teaches you to distrust its
-          // silence.
-          const spoken = res.abstained ? res.answer : answerRef.current;
-          if (voiceOnRef.current && spoken.trim()) void playAnswer(spoken);
+          // silence. playAnswer strips the citation markers before Sarvam
+          // sees them.
+          if (voiceOnRef.current && res.answer.trim()) void playAnswer(res.answer);
         },
         onError: (e) => {
           setError(e.message);
@@ -508,6 +549,67 @@ export default function Home() {
   const ttft = result?.trace.breakdown["generate.ttft"] ?? null;
   const abstained = result?.abstained ?? false;
 
+  /**
+   * Citation labels, re-derived from the answer text.
+   *
+   * The server returns citations in FIRST-APPEARANCE order of the [n] markers,
+   * but carries no original index — so labelling boxes by array position made
+   * an answer reading "…sedation [3][1]." point at Sources labelled [1] and
+   * [2]: the marker on screen named a different box. Walking the answer's own
+   * markers in order reproduces the server's ordering exactly. The length
+   * guard falls back to positional labels on the uncited path, where the
+   * server returns the whole retrieved context and positional is correct.
+   */
+  const citeLabels = useMemo(() => {
+    const seen: string[] = [];
+    for (const m of answer.matchAll(/\[(\d{1,2})\]/g)) {
+      if (!seen.includes(m[1])) seen.push(m[1]);
+    }
+    return seen.length === citations.length
+      ? seen
+      : citations.map((_, i) => String(i + 1));
+  }, [answer, citations]);
+
+  /** Did the answer actually cite, or is the panel retrieved-context fallback? */
+  const citedDirectly =
+    citations.length > 0 && /\[\d{1,2}\]/.test(answer);
+
+  /**
+   * Citations as they should be READ, not as they are stored.
+   *
+   * The server sends the raw chunk (700 chars, 120 of which overlap the
+   * neighbouring chunk), and MS MARCO passages carry scraped nav boilerplate:
+   * alphabet runs ("a b c d e f g…"), bare URLs, and question-list fragments.
+   * Cleaning is display-only — scores, retrieval and the prompt are untouched
+   * — and the full original text stays available on the title attribute.
+   */
+  const displayCitations = useMemo(() => {
+    const seenStart = new Set<string>();
+    const out: { c: Citation; label: string; text: string }[] = [];
+    citations.forEach((c, i) => {
+      // Scraped furniture (A-Z index strips, bare URLs, question rails) is
+      // already gone: the server cleans Citation.text in _citations, so there
+      // is one implementation of those rules rather than two that drift.
+      // What remains here is purely a display decision.
+      let t = c.text;
+      // Adjacent chunks of one document overlap by 120 characters, so two
+      // citations from the same page open identically and read as a
+      // copy-paste bug. Only the uncited context list may drop one — a cited
+      // box has to exist for its [n] marker to point at.
+      const key = t.slice(0, 80).toLowerCase();
+      if (!citedDirectly && seenStart.has(key)) return;
+      seenStart.add(key);
+      // Enough to verify a claim against. Five unclipped 700-char slabs pushed
+      // the guardrails and the latency HUD below the fold on camera.
+      if (t.length > 240) {
+        const cut = t.lastIndexOf(" ", 240);
+        t = `${t.slice(0, cut > 160 ? cut : 240)}…`;
+      }
+      out.push({ c, label: citeLabels[i] ?? String(i + 1), text: t });
+    });
+    return out;
+  }, [citations, citeLabels, citedDirectly]);
+
   return (
     <main>
       <header className="top">
@@ -566,12 +668,46 @@ export default function Home() {
             disabled={vad.loading}
             aria-pressed={vad.listening}
           >
-            <span className="dot" />
-            {vad.loading
-              ? "Loading voice model…"
-              : vad.listening
-                ? "Listening — click to stop"
-                : "Hold a question. Click to speak."}
+            {/*
+              The organisers draw exactly this on their own Task #2 card: a
+              green disc inside a dashed pink ring, with a small yellow badge
+              clipped to the corner. There it is an illustration of a
+              microphone; here it is the microphone. The badge keeps the job it
+              already looks like it is doing — it turns pink and pulses while
+              the socket is open, and the ring turns.
+            */}
+            <span className="mic-emblem" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none">
+                <rect
+                  x="9"
+                  y="2"
+                  width="6"
+                  height="11"
+                  rx="3"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                />
+                <path
+                  d="M5 10.5a7 7 0 0 0 14 0"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                />
+                <path
+                  d="M12 17.5V21"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </span>
+            <span className="mic-label">
+              {vad.loading
+                ? "Loading voice model…"
+                : vad.listening
+                  ? "Listening — click to stop"
+                  : "Hold a question. Click to speak."}
+            </span>
           </button>
 
           <PhasePill phase={phase} speculations={speculations} />
@@ -592,13 +728,20 @@ export default function Home() {
             submitTyped(typed);
           }}
         >
+          {/*
+            readOnly, not disabled: disabling a focused element dumps keyboard
+            focus to <body>, so every typed question stranded a keyboard user
+            back at the top of the page — and the typed path exists precisely
+            for the judge on a managed browser.
+          */}
           <input
             type="text"
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
             placeholder="…or type a question"
             aria-label="Type a question"
-            disabled={phase === "thinking" || phase === "answering"}
+            readOnly={phase === "thinking" || phase === "answering"}
+            aria-busy={phase === "thinking" || phase === "answering"}
           />
           <button type="submit" disabled={!typed.trim()}>
             Ask
@@ -612,10 +755,12 @@ export default function Home() {
           web -- and the system then correctly declines, which from the outside
           is indistinguishable from a bug.
         */}
-        {examples.length > 0 && (
+        {(examples.length > 0 || unanswerable) && (
           <>
             <p className="chips-head eyebrow">
-              This corpus can answer questions like
+              {examples.length > 0
+                ? "This corpus can answer questions like"
+                : "Watch it decline a question it cannot answer"}
             </p>
             <div className="chips">
               {examples.map((p) => (
@@ -623,6 +768,13 @@ export default function Home() {
                   {p}
                 </button>
               ))}
+              {/*
+                Outside the examples guard on purpose: the unanswerable chip
+                comes from a separate manifest key and is the single best demo
+                affordance on the page — it shows the abstention guardrail
+                working on purpose. It must not vanish just because the
+                sampled example pool came back empty.
+              */}
               {unanswerable && (
                 <button
                   className="chip decline"
@@ -638,7 +790,7 @@ export default function Home() {
       </section>
 
       {partial && (
-        <p className="partial">
+        <p className="partial" aria-live="polite">
           <span className="pl">hearing</span> {partial}
           <span className="caret" />
         </p>
@@ -650,24 +802,49 @@ export default function Home() {
         </p>
       )}
 
-      {error && <p className="error">{error}</p>}
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
 
-      {(answer || phase === "answering") && (
+      {/*
+        Keyed on the request state, not on the text. Keying on `answer` did two
+        bad things: during "thinking" the card did not exist at all, so a
+        hosted-LLM round trip was seconds of motionless screen that read as a
+        hang on camera; and an abstention whose reason string was empty would
+        have removed the card entirely, taking the "Declined to answer" badge
+        and the mute control with it.
+      */}
+      {(phase === "thinking" || phase === "answering" || result) && (
         <article className={`answer ${abstained ? "abstained" : ""}`}>
           {abstained && <div className="abstain-tag">Declined to answer</div>}
-          <p>
-            {answer}
-            {phase === "answering" && <span className="caret" />}
+          <p aria-live="polite">
+            {answer ||
+              (phase === "thinking" ? (
+                <span className="searching">
+                  searching{" "}
+                  {stats ? stats.chunks.toLocaleString() : "the"} indexed
+                  passages
+                </span>
+              ) : abstained ? (
+                "The system declined to answer."
+              ) : null)}
+            {(phase === "answering" || phase === "thinking") && (
+              <span className="caret" />
+            )}
           </p>
           <div className="mic-row" style={{ marginTop: 12, gap: 16 }}>
-            {speaking && (
-              <span className="speaking-tag">
+            {(speaking || synthesising) && (
+              <span
+                className={`speaking-tag ${synthesising ? "synthesising" : ""}`}
+              >
                 <span className="bars" aria-hidden="true">
                   <i />
                   <i />
                   <i />
                 </span>
-                Speaking
+                {synthesising ? "Preparing voice…" : "Speaking"}
               </span>
             )}
             <button
@@ -677,7 +854,7 @@ export default function Home() {
             >
               {voiceOn ? "Mute spoken answers" : "Unmute spoken answers"}
             </button>
-            {!speaking && voiceOn && answer.trim() && phase === "done" && (
+            {!speaking && !synthesising && voiceOn && answer.trim() && phase === "done" && (
               <button className="mute-btn" onClick={() => void playAnswer(answer)}>
                 Replay
               </button>
@@ -686,14 +863,25 @@ export default function Home() {
         </article>
       )}
 
-      {citations.length > 0 && (
+      {displayCitations.length > 0 && (
         <section className="cites">
-          <h2>Sources</h2>
-          <ol>
-            {citations.map((c, i) => (
-              <li key={c.chunk_id}>
-                <span className="ci">[{i + 1}]</span>
-                <span className="ct">{c.text}</span>
+          {/*
+            "Sources" is only honest when the answer actually cited. When the
+            model emits no [n], the server falls back to returning the whole
+            retrieved context — presenting that under "Sources" with pink
+            markers claimed a link the answer never made.
+          */}
+          <h2>{citedDirectly ? "Sources" : "Retrieved passages"}</h2>
+          {!citedDirectly && (
+            <p className="cites-note">
+              shown as context — the answer did not cite these directly
+            </p>
+          )}
+          <ol role="list">
+            {displayCitations.map(({ c, label, text }) => (
+              <li key={c.chunk_id} role="listitem" title={c.text}>
+                <span className="ci">[{label}]</span>
+                <span className="ct">{text}</span>
                 <span className="cs">{c.score.toFixed(3)}</span>
               </li>
             ))}
@@ -723,7 +911,10 @@ export default function Home() {
         <footer className="foot">
           {stats.chunks.toLocaleString()} chunks · {stats.strategy} chunking ·{" "}
           {stats.embedding_model}
-          {result && ` · answered by ${result.provider}`}
+          {/* provider is the literal string "none" on every refusal and every
+              provider failure — "answered by none" at the exact moment the
+              demo is degraded is the worst possible caption. */}
+          {result && result.provider !== "none" && ` · answered by ${result.provider}`}
         </footer>
       )}
     </main>
@@ -759,10 +950,19 @@ function GuardrailPanel({
   // Grounding only means something once an answer exists to ground. Showing
   // "Grounding 0%" beside a refusal reads as a failed check when in fact
   // nothing was ever asserted, which is the guardrail succeeding.
-  const scored = !report.abstained && report.grounding_score !== undefined;
+  //
+  // typeof, not !== undefined: the API serialises "grounding did not run" as
+  // JSON null, and `null !== undefined` is true — so the guard never fired and
+  // a skipped check rendered as a green "0%" captioned "every claim traced".
+  const scored =
+    !report.abstained && typeof report.grounding_score === "number";
   const grounding = scored
     ? `${((report.grounding_score ?? 0) * 100).toFixed(0)}%`
     : "not applicable";
+
+  // The gate's own confidence that the corpus cannot answer — the one number
+  // the answer card cannot show.
+  const gatePct = ((report.abstain_confidence ?? 0) * 100).toFixed(0);
 
   return (
     <section className="guard">
@@ -770,14 +970,29 @@ function GuardrailPanel({
       <div className="guard-grid">
         <GuardCard
           k="Input"
+          // input_reason is None on every ALLOWED request, so the happy path —
+          // the whole demo — rendered a half-empty box. State what the check
+          // looked for instead of leaving dead space.
           v={report.input_allowed ? "Accepted" : "Blocked"}
-          note={report.input_reason}
+          note={
+            report.input_allowed
+              ? "no injection, jailbreak or policy pattern matched"
+              : report.input_reason
+          }
           state={report.input_allowed ? "pass" : "fail"}
         />
         <GuardCard
           k="Answer"
           v={report.abstained ? "Declined" : "Asserted"}
-          note={report.abstain_reason}
+          // Never abstain_reason: on every abstained exit the response answer
+          // IS abstain_reason, so this card was reprinting — verbatim — the
+          // refusal sentence the judge just read in the answer card above it.
+          // The gate confidence is the number that card cannot show.
+          note={
+            report.abstained
+              ? `abstention gate ${gatePct}% confident the corpus cannot answer this`
+              : `gate confidence ${gatePct}% — under the refusal bar, so answering was allowed`
+          }
           // Declining is the system working, not failing. Colouring it red
           // would teach a viewer to read a correct refusal as a bug.
           state={report.abstained ? "neutral" : "pass"}
@@ -785,12 +1000,16 @@ function GuardrailPanel({
         <GuardCard
           k="Grounding"
           v={grounding}
+          // The score is a length-weighted mean of lexical support per claim,
+          // not a coverage count — captioning 71% as "every claim traced"
+          // put two contradictory statements in the one panel whose whole job
+          // is credibility. Describe the metric; let the number be the claim.
           note={
             report.unsupported_claims?.length
               ? `${report.unsupported_claims.length} unsupported claim(s) withheld`
               : scored
-                ? "every claim traced to a passage"
-                : "no claim was asserted"
+                ? "mean lexical support per claim, against the cited passages"
+                : "no claim was asserted, so there is nothing to ground"
           }
           state={!scored ? "neutral" : report.grounded === false ? "fail" : "pass"}
         />

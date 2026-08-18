@@ -29,8 +29,10 @@ export interface GuardrailReport {
   abstain_reason?: string | null;
   abstain_confidence?: number;
   abstain_signals?: Record<string, number>;
-  grounded?: boolean;
-  grounding_score?: number;
+  // Nullable, not optional-only: FastAPI serialises "grounding did not run"
+  // as JSON null, and a `!== undefined` check let null through as scored.
+  grounded?: boolean | null;
+  grounding_score?: number | null;
   unsupported_claims?: string[];
 }
 
@@ -209,6 +211,29 @@ export async function fetchExamples(n = 6): Promise<Examples> {
  * Returns an object URL the caller must revoke, or null if synthesis was
  * refused — a demo should stay usable when TTS is unavailable, not error.
  */
+/**
+ * The answer as it should be HEARD, not as it is displayed.
+ *
+ * The prompt requires inline citation markers, so `answer` legitimately ends in
+ * "[1][3]" — and Sarvam TTS was reading them: "…treats neuropathy one three."
+ * The markers stay on screen (they are the visible link to the numbered
+ * Sources list); only the speech strips them. The second pattern also drops
+ * bracketed editorial notes like " [truncated at the latency budget]", which
+ * the pipeline appends on a deadline exit and which the first, digits-only
+ * pattern would miss. Then it heals the punctuation the removals orphaned.
+ */
+const CITE_MARKS = /\s*\[\s*\d{1,2}(?:\s*[,–-]\s*\d{1,2})*\s*\]/g;
+const BRACKET_NOTES = /\s*\[[^\]]{1,80}\]/g;
+
+export function speakable(text: string): string {
+  return text
+    .replace(CITE_MARKS, "")
+    .replace(BRACKET_NOTES, "")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 export async function speak(
   text: string,
   languageCode = "en-IN",

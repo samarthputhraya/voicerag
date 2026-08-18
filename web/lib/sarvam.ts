@@ -225,11 +225,26 @@ export class SarvamRealtimeStt {
         };
       case "error": {
         const err = (msg.error ?? msg) as Record<string, unknown>;
+        // Sarvam ends an idle realtime session with
+        //   {code: "inactivity_timeout", message: "No audio received for 60s.",
+        //    is_fatal: true, status_code: 408}
+        // and it means "you stopped talking", not "something broke". The
+        // browser VAD deliberately keeps the microphone open after a question,
+        // so this fires on any session where the user asks once and then
+        // listens to the answer -- which put a red "Speech recognition failed"
+        // banner on screen, sometimes directly above a correct answer.
+        //
+        // Downgraded rather than dropped: `onTranscript` ignores non-fatal
+        // errors for display but the event still reaches any caller that wants
+        // to observe the session ending.
+        const idle =
+          String(err.code ?? "") === "inactivity_timeout" ||
+          Number(err.status_code ?? 0) === 408;
         return {
           kind: "error",
           text: String(err.message ?? "unknown stt error"),
           tMs,
-          fatal: Boolean(err.is_fatal),
+          fatal: idle ? false : Boolean(err.is_fatal),
           raw: msg,
         };
       }
