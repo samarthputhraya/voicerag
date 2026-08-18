@@ -50,6 +50,38 @@ from fastapi import WebSocket, WebSocketDisconnect
 from ..config import Settings
 from ..stt.sarvam import REALTIME_URL
 
+
+#: Close codes and phrases that mean "this socket simply went quiet", not
+#: "something broke". Sarvam ends an idle realtime session with 1008 and the
+#: phrase "Inactivity timeout" -- which is exactly what happens every time a
+#: user asks one question and then stops talking, because the browser VAD keeps
+#: the microphone open for the next one.
+#:
+#: Reporting that as a fatal relay error put a red
+#: "Speech recognition failed: ConnectionClosedError: received 1008 (policy
+#: violation) Inactivity timeout" banner on screen *above a perfectly good
+#: answer*. The session ending is normal; only a genuine transport or upstream
+#: fault is worth a user's attention.
+_BENIGN_CLOSE_CODES = frozenset({1000, 1001, 1005, 1008})
+_BENIGN_PHRASES = ("inactivity", "timeout", "going away", "normal closure")
+
+
+def _is_benign_close(exc: BaseException) -> bool:
+    """True when an upstream close is an idle session ending, not a failure."""
+    name = type(exc).__name__
+    if name == "ConnectionClosedOK":
+        return True
+    if name != "ConnectionClosedError":
+        return False
+    code = getattr(getattr(exc, "rcvd", None), "code", None)
+    if code is None:
+        code = getattr(exc, "code", None)
+    text = str(exc).lower()
+    if code in _BENIGN_CLOSE_CODES:
+        return True
+    return any(p in text for p in _BENIGN_PHRASES)
+
+
 __all__ = ["relay_sarvam"]
 
 log = logging.getLogger("voicerag.api.stt_relay")
@@ -207,6 +239,12 @@ async def relay_sarvam(ws: WebSocket, cfg: Settings) -> None:
     except WebSocketDisconnect:
         pass
     except Exception as exc:  # noqa: BLE001 - never leak a traceback to a client
+        if _is_benign_close(exc):
+            # The upstream session simply went idle. Nothing failed, so nothing
+            # is reported: the browser sees a normal close and the VAD opens a
+            # fresh socket the next time the user speaks.
+            log.info("stt relay upstream closed quietly: %s", exc)
+            return
         log.warning("stt relay failed: %s: %s", type(exc).__name__, exc)
         try:
             await ws.send_json(

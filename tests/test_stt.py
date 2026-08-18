@@ -902,3 +902,32 @@ async def test_completed_speculations_are_never_double_counted():
     assert driver.stats.completed == 2
     assert driver.stats.completed <= driver.stats.launched
     await driver.aclose()
+
+
+# --- relay: an idle session is not a failure -----------------------------------
+
+
+def test_idle_upstream_close_is_not_reported_as_a_failure() -> None:
+    """Sarvam ends an idle realtime session with 1008 "Inactivity timeout".
+
+    The browser VAD deliberately keeps the microphone open after a question, so
+    this fires on any session where the user asks once and then listens to the
+    answer. Treating it as a fatal relay error put a red "Speech recognition
+    failed: ConnectionClosedError ..." banner on screen -- observed in testing
+    sitting directly above a correct, fully grounded answer.
+    """
+    from voicerag.api.stt_relay import _is_benign_close
+
+    closed_error = type("ConnectionClosedError", (Exception,), {})
+
+    idle = closed_error(
+        "received 1008 (policy violation) Inactivity timeout; "
+        "then sent 1008 (policy violation) Inactivity timeout"
+    )
+    assert _is_benign_close(idle)
+
+    assert _is_benign_close(type("ConnectionClosedOK", (Exception,), {})("bye"))
+
+    # A genuine upstream fault must still be reported.
+    assert not _is_benign_close(closed_error("received 1011 internal error"))
+    assert not _is_benign_close(RuntimeError("upstream refused the subscription key"))
