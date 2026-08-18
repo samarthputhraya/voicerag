@@ -60,21 +60,53 @@ reports frames to `onFrameProcessed` before it declares speech started, so those
 leading frames — which carry the first word — are retained and primed into the
 socket via `stt.prime()` when the session opens.
 
-### Still true, and still the main risk
+### Verified in a real browser — this is no longer unconfirmed
 
-That environment had **no microphone and no browser automation**, so nothing on
-the voice path was ever observed working end to end in a real browser. The fix
-is well-reasoned and empirically supported by the 404, but **someone must still
-click the mic and confirm.** If you cannot drive a real mic either, say so
-rather than shipping another unverified change.
+Earlier sessions had no microphone and no browser automation, so every voice fix
+was reasoned from library source and never watched running. That gap is now
+closed. Chrome was driven over the DevTools Protocol and the **whole path was
+observed working end to end**, in both a dev server and a `next build`
+production bundle:
 
-### What IS verified working (measured, not assumed)
+| Step | Observed |
+|---|---|
+| VAD assets | `silero_vad_legacy.onnx`, `ort-wasm-simd-threaded.mjs`, `ort-wasm-simd-threaded.wasm` all **200** |
+| VAD init | `vad is initialized` → `started micVAD`, `aria-pressed=true` |
+| Relay | `ws://localhost:8000/stt/stream` → **HTTP 101** |
+| Partials | streamed live, one `/speculate` fired per revision |
+| Answer | grounded and cited, `Input=Accepted Answer=Asserted Grounding=68–74%` |
+| Spoken back | `POST /speak` → **200** |
+| Wall clock | **553–862 ms** from speech start to rendered answer |
+
+Hindi is the better demo: partials render in **Devanagari** as you speak, then
+the final transcript arrives in **English** ("Can Gabapentin treat neuropathy?")
+because Sarvam is called with `mode=translate`, and the answer is spoken back in
+Hindi.
+
+**How to re-run it** (the harness is not in the repo — it is throwaway, but the
+technique is worth keeping): launch Chrome with `--remote-debugging-port`, then
+`Page.addScriptToEvaluateOnNewDocument` a script that replaces
+`navigator.mediaDevices.getUserMedia` with a `MediaStreamAudioDestinationNode`
+you feed from a decoded WAV. Everything downstream of `getUserMedia` is then the
+real application. Chrome's own `--use-file-for-fake-audio-capture` was tried
+first and is a trap: its fake device opens at **44100 Hz stereo**, and
+`FileSource` silently plays *silence* for any file that does not match, which is
+indistinguishable from a microphone that hears nothing.
+
+### Also verified (measured, not assumed)
 
 - The relay: `ws://127.0.0.1:8000/stt/stream` connects in **8 ms** and returns
   real transcripts when fed synthesized speech from a Python client.
 - Sarvam STT, TTS and translate all return 200 with a live key.
 - Full voice→answer chain, driven from Python: **~1.0–1.6 s** after speech ends,
   in Hindi, Bengali and Tamil.
+- The pre-roll buffer works, and the check that proves it: stream the *same* WAV
+  to the relay from Python with no VAD in the loop, and compare. Both return
+  `"Hand Gabapentin treats neuropathy"` — the browser now matches the ceiling
+  exactly, so nothing is being clipped. (Sarvam mishears "Can" as "Hand" on
+  *synthesised* speech; that is a recogniser artifact, not lost audio, and it
+  retrieved and answered correctly anyway. Before the pre-roll it was "And
+  Gabapentin treat neuropathy" — a genuinely missing first phoneme.)
 
 ### Ruled out (checked in `web/node_modules`, do not redo)
 
@@ -98,6 +130,110 @@ partial transcripts and speculative retrieval, and removes the race entirely.
 than leaving the button on "Loading voice model…". Open devtools, click the mic,
 and read the console and network tab — and check **which URL** a 404 is on, not
 merely whether the file exists at the path you expect.
+
+---
+
+## 1b. DEMO-POLISH PASS — what a judge perceives
+
+A five-specialist audit swept the frontend, retrieval, guardrails, API and repo.
+The defects below were all confirmed against code and then fixed and verified in
+a real browser. They are grouped by what a judge would have *experienced*.
+
+### The voice read the citation markers aloud
+
+`playAnswer` sent the answer verbatim to Sarvam, so "…neuropathy [1][3]" was
+spoken as "one three". Fixed with `speakable()` in `web/lib/api.ts`, applied
+**inside** `playAnswer` so both call sites (auto-play and Replay) are covered.
+
+Deliberately stripped for speech only, never from the screen: the markers are
+the visible link to the numbered Sources list and the most legible proof of
+grounding on the page. Verified at the network layer — the `/speak` request body
+now contains no brackets while the rendered answer still shows them.
+
+### The Sources panel showed scraped junk
+
+MS MARCO passages carry navigation furniture. Real captures included an A-Z
+index strip (`a b c d e f g …`), bare source URLs, and a "related questions"
+rail flattened into one dash-run. A full-store scan found 136 alphabet-run
+chunks, 419 starting with a URL, 8,550 containing one.
+
+Fixed **server-side** in `src/voicerag/snippets.py`, applied in
+`_citations`. Provably display-only: `_contexts` returns `(chunks,
+prompt_texts)`; the model is prompted with `prompt_texts` and grounding verifies
+against `prompt_texts`, so nothing but a renderer reads the field being cleaned.
+The cleaner refuses to remove more than three quarters of a passage, so it can
+never empty a citation. 9 tests in `tests/test_snippets.py` are built from
+strings that were actually on screen.
+
+### Citation numbers pointed at the wrong boxes
+
+The server returns citations in first-appearance order but carries no original
+index, and the UI relabelled them positionally — so an answer citing `[3][4]`
+produced Sources labelled `[1]` and `[2]`. Labels are now re-derived from the
+answer's own markers, with a positional fallback for the uncited path.
+
+### Boxes with nothing in them, or the same thing twice
+
+- The **Input** guardrail card was blank on every successful request, because
+  `input_reason` is `None` when allowed. It now states what was checked.
+- The **Answer** card reprinted the refusal sentence verbatim — on every
+  abstained path the response `answer` *is* `abstain_reason`. It now shows the
+  abstention gate's confidence, the one number the answer card cannot show.
+- `grounding_score !== undefined` never fired, because the API sends JSON
+  `null`. A skipped check rendered as a green "0%" captioned "every claim traced
+  to a passage". Now a `typeof` check, and the types are nullable.
+- `.guard-grid` stretched every card to the tallest; it now sizes to content.
+
+### Grounding refused answers the corpus could support
+
+Measured on `reports/guardrails_e2e.json`: 6 of 9 refusals on gold-answerable
+questions came from grounding, three at scores of 0.92, 0.64 and 0.58 — above
+every threshold. Two independent causes, both fixed in
+`guardrails/grounding.py`, **without lowering any threshold**:
+
+1. **Cited passages were tested individually.** `SYSTEM_PROMPT` rule 2 tells the
+   model "You MAY combine facts stated across passages", then the checker
+   vetoed exactly that: a sentence synthesised from two passages failed both
+   halves. Multi-citation claims are now scored against the **union** of what
+   they cite. A true synthesis case goes 0.500 → 1.000; the same claim citing
+   only one passage is still correctly refused.
+2. **Grounding did not stem, but the retriever does.** The served BM25 index is
+   built with `{"stemmer": "english"}`, so a passage is retrieved because
+   `anticonvulsants` matches `anticonvulsant` — and grounding then compared raw
+   surface forms and called the answer unsupported, on one inflectional `s`.
+   `_tokens` now uses the same Snowball stemmer the index uses.
+
+Safety held: fabrication, fabricated numbers, unsupported single citations and
+invalid citation indices are all still refused, and all 505 tests pass.
+
+### Smaller things that read as breakage on camera
+
+- The HUD asserted "0.0 ms within 200 ms budget" in green **before any question
+  was asked**, and kept the previous request's waterfall during "thinking" and
+  forever after an error. Both gated on real measurements now.
+- Seconds of motionless screen between submitting and the first token. The
+  answer card now exists during `thinking` with a live placeholder.
+- "Speaking" animated for ~1.4 s *before* any audio existed. Split into
+  "Preparing voice…" and "Speaking".
+- Muting mid-synthesis did not mute — the audio arrived late and played anyway
+  with no control left to stop it. A generation token now cancels in-flight
+  synthesis.
+- The footer read "answered by none" on every refusal and provider failure.
+- Disabling the focused input ejected keyboard focus to `<body>` after every
+  typed question; it is `readOnly` now.
+- The retrieval-timeout refusal told the user to "Raise BUDGET_TOTAL_MS or use a
+  faster embedder than lsa:128" — ops advice, on screen and read aloud, naming
+  an embedder the system no longer uses. Config advice moved to the log.
+
+### Local `.env` contradicted the served index
+
+`.env` carried `EMBEDDER_SPEC=lsa:128` and `CHUNKING_STRATEGY=sentence_window`
+while the served index is `static:minishlab/potion-base-8M` + `recursive`. The
+manifest wins at load time, so serving was correct — but **any rebuild would
+have silently reinstated the 20.3 ms embedder** that was removed for blowing the
+retrieval budget. Corrected, along with `MMAP_SPARSE=false`, which removes the
+cold-start page-fault that caused an outright retrieval timeout on the first
+question after a restart.
 
 ---
 
@@ -137,7 +273,7 @@ cd web; npm run dev      # localhost:3000
 
 | # | Requirement | State |
 |---|---|---|
-| 1 | Sarvam **or** ElevenLabs STT | Both implemented. Sarvam via server-side relay. **Browser leg broken.** |
+| 1 | Sarvam **or** ElevenLabs STT | Both implemented. Sarvam via server-side relay. Browser leg fixed and **observed working end to end** (§1). |
 | 2 | "Vast" chunking | 6 strategies + real ablation that *changed the build*. Done. |
 | 3 | <200 ms | P50 141.6 / P70 142.9 / **P100 157.3 ms** with modelled decode. Retrieval path 7.3 ms P50 fully measured. |
 | 4 | P50/P70/P100 | `reports/latency.md`, nearest-rank, same definition in Python and the HUD. Done. |
@@ -247,9 +383,11 @@ tens of minutes).
 
 ## 8. What to do next, in priority order
 
-1. **Confirm the microphone.** The root cause is found and fixed (§1) but has
-   never been observed working in a real browser. Click the mic; that is the
-   whole task. Everything below is blocked behind a demo that visibly works.
+1. ~~Fix the microphone.~~ **Done and verified in a real browser** (§1), in
+   English and Hindi, on both a dev server and a production build. Worth one
+   confirming click on real hardware — the verification injected audio at
+   `getUserMedia`, so the app below that boundary is fully exercised but a
+   physical capture device is not.
 2. **Deploy the live link** — a required deliverable, currently missing. All six
    known blockers are fixed (`.dockerignore`, `model2vec` in requirements, env
    vars un-prefixed, `INDEX_URL`/`INDEX_ROWS` build args, correct baked model,
