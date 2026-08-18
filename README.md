@@ -459,6 +459,18 @@ docker build -f deploy/Dockerfile --build-arg INDEX_ROWS=20000 -t voicerag .
 docker run -p 8000:8000 -e SARVAM_API_KEY=... -e GROQ_API_KEY=... voicerag
 ```
 
+**Oracle Cloud Always Free** (genuinely $0, no sleep-on-idle) — an Ampere A1
+ARM instance with Caddy terminating TLS. Every pinned dependency was checked to
+publish a Linux `aarch64` wheel, `faiss-cpu` included, which matters because it
+ships no sdist. See [`deploy/oracle/`](deploy/oracle/); `.github/workflows/arm-image.yml`
+builds and boots the image on a native ARM runner so the platform is proven
+before a VM is created.
+
+HTTPS is not optional on that path: `getUserMedia` only works in a secure
+context, so an IP-only HTTP deployment is a voice demo with no voice. Caddy
+obtains a Let's Encrypt certificate automatically, and `<ip>.sslip.io` gives you
+a real hostname without buying a domain.
+
 Hugging Face Spaces (CPU Basic: 16 GB at no hourly cost, though *creating* a
 Docker Space requires a paid plan — Render's 512 MB `starter` OOMs on this
 index, and its `standard` is paid too):

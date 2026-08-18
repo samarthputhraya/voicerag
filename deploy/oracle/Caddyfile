@@ -1,0 +1,36 @@
+# TLS terminator in front of the API.
+#
+# Caddy exists here for one reason: `getUserMedia` only works in a secure
+# context. Served over plain HTTP on an IP, the microphone button does nothing
+# at all and the browser explains itself only in the console -- so a bare
+# Oracle instance without this file is a voice demo with no voice.
+#
+# `{$SITE_ADDRESS}` is set by deploy.sh: either a domain you own, or
+# `<public-ip>.sslip.io`, which resolves to the IP it names and is therefore a
+# real hostname Let's Encrypt will issue for. Caddy obtains and renews the
+# certificate on its own; there is no certbot step and no cron entry.
+
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	# WebSockets need no special handling in Caddy v2 -- reverse_proxy upgrades
+	# the connection itself, which matters because WS /stt/stream *is* the
+	# microphone path.
+	#
+	# The default headers are load-bearing, not incidental:
+	#   X-Forwarded-For   -> the rate limiter's client identity
+	#   X-Forwarded-Host  -> stt_relay._origin_allowed's same-origin check.
+	#     Inside the container the Host header is `voicerag:8000`, so without
+	#     this the relay would compare the browser's Origin against a Docker
+	#     service name, refuse the upgrade with 1008, and produce the exact
+	#     failure the deploy notes warn about: mic lights, waveform moves, no
+	#     transcript.
+	reverse_proxy voicerag:8000 {
+		# The relay caps a session at 120 s; allow for that plus slack rather
+		# than letting the proxy be the thing that ends a long question.
+		transport http {
+			read_timeout 300s
+			write_timeout 300s
+		}
+	}
+}

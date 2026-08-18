@@ -1,0 +1,64 @@
+# VoiceRAG on one Oracle Always Free instance: the app, and TLS in front of it.
+#
+# Run from this directory via deploy.sh, which resolves SITE_ADDRESS and passes
+# the secrets through from /opt/voicerag/.env.
+
+services:
+  voicerag:
+    build:
+      # The Dockerfile expects the repo root: it copies src/, web/, scripts/ and
+      # requirements.txt, and .dockerignore is read relative to this context.
+      context: ../..
+      dockerfile: deploy/Dockerfile
+      args:
+        INDEX_ROWS: "20000"
+        INDEX_STRATEGY: recursive
+        EMBED_MODEL: minishlab/potion-base-8M
+    image: voicerag:local
+    restart: unless-stopped
+    expose:
+      - "8000"
+    # Deliberately no `ports:` — the app is reachable only through Caddy. A
+    # published 8000 would be an unencrypted route around TLS, and any visitor
+    # who found it would get a page whose microphone cannot work.
+    environment:
+      # Everything else is baked into the image's ENV (see deploy/Dockerfile);
+      # only the secrets and the things that vary per host belong here.
+      SARVAM_API_KEY: ${SARVAM_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      STT_SIGNING_KEY: ${STT_SIGNING_KEY:-}
+      # Same-origin: the browser loads the page and calls the API on one
+      # hostname, so CORS never applies and stt_relay's same-origin check
+      # admits the upgrade on its own. Set this only if you serve the frontend
+      # from somewhere else.
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - voicerag
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates must outlive `docker compose down`. Without this volume
+      # every restart re-requests from Let's Encrypt, and five restarts in an
+      # hour is how you discover the rate limit on the morning of a demo.
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

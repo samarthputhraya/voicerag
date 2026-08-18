@@ -649,9 +649,36 @@ Options, in the order they are worth considering with three days left:
    with no `MAX_TOKENS`, which overrides the image's ENV and reintroduces the
    truncated-mid-sentence answers that `6450768` fixed — corrected this
    session). 2 GB against ~740 MB resident is comfortable. Costs more than (1).
-3. **Somewhere else free** — Fly.io, Koyeb, Cloud Run. All are a new deploy path
-   to debug from scratch, and Cloud Run's scale-to-zero means a ~20 s index load
-   on a judge's first request. Do not start here three days out.
+3. **Oracle Cloud Always Free — built, and the chosen path.** Genuinely $0, and
+   unlike a Space it never sleeps. `deploy/oracle/` has cloud-init, a compose
+   file, a Caddyfile, an env template and a `deploy.sh` that prints the live URL.
+   Read `deploy/oracle/README.md` before starting; the two things that actually
+   go wrong are flagged there.
+
+   **HTTPS is mandatory, and it is the reason this path is more work than a
+   PaaS.** `getUserMedia` only works in a secure context, so a bare Oracle IP
+   over HTTP gives a dead microphone — the one thing the demo is about. Caddy
+   obtains a Let's Encrypt certificate on its own, and `<ip>.sslip.io` resolves
+   to the IP it names, so there is a real hostname to certify without buying a
+   domain.
+
+   ARM viability was checked rather than assumed. Every pinned requirement
+   publishes a Linux `aarch64` wheel; `faiss-cpu 1.15.0` matters most because it
+   ships **no sdist**, so a missing wheel would have been fatal rather than slow
+   — it has `manylinux_2_28_aarch64`, and Debian Bookworm's glibc 2.36 satisfies
+   it. `package-lock.json` carries `@next/swc-linux-arm64-gnu`, so `npm ci`
+   resolves the right SWC binary on ARM. `pyarrow` (pulled in only for the
+   index build) has aarch64 wheels too, so Arrow is never compiled from source.
+
+   What could not be checked here: this machine has no Docker, so the image has
+   never been built. `.github/workflows/arm-image.yml` closes that on a free
+   native ARM runner — it builds with a 200-row index, boots the container,
+   and asserts that `/` is the UI, `/api` is the map, a VAD asset is served, and
+   rate limiting is on. Run it before creating the VM.
+
+4. **Other free hosts** — Fly.io killed its free tier; Koyeb and Render free are
+   512 MB and OOM on a 740 MB index; Cloud Run scales to zero, so a judge's
+   first request pays a ~20 s index load. Do not start here three days out.
 
 Once a Space exists:
 

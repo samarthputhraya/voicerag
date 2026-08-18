@@ -1,0 +1,17 @@
+# Line endings.
+#
+# This repo is developed on Windows with core.autocrlf on, so a working-copy
+# file is CRLF while the stored blob is LF. That is fine for Python and
+# TypeScript, and fatal for anything a Linux kernel has to execute: a shell
+# script with CRLF fails as `#!/usr/bin/env bash\r: No such file or directory`,
+# which reads as a missing interpreter rather than as a line-ending problem and
+# has cost people entire evenings.
+#
+# These are the files that cross to Linux and must stay LF regardless of the
+# platform they were last edited on.
+*.sh            text eol=lf
+*.yaml          text eol=lf
+*.yml           text eol=lf
+Dockerfile      text eol=lf
+Caddyfile       text eol=lf
+env.template    text eol=lf

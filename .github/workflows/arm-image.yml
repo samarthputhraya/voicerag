@@ -1,0 +1,97 @@
+# Prove the image builds and boots on ARM64, before an hour is spent on a VM.
+#
+# The Oracle Always Free deployment runs on Ampere A1 (aarch64), and this repo
+# is developed on Windows/x64 with no Docker available -- so the ARM build was
+# the one part of that plan that could not be checked locally at all. Every
+# pinned dependency was verified to publish a Linux aarch64 wheel (faiss-cpu
+# matters most: it ships no sdist, so a missing wheel would be fatal rather than
+# slow), but "the wheels exist" is not "the image builds and the app answers".
+# This closes that gap on free hardware in a few minutes.
+#
+# `ubuntu-24.04-arm` is a native ARM runner, free for public repositories. No
+# QEMU: emulated builds are slow enough to time out and, worse, can pass while
+# the native build fails.
+
+name: ARM64 image
+
+on:
+  push:
+    paths:
+      - "deploy/**"
+      - "web/**"
+      - "src/**"
+      - "requirements.txt"
+      - ".dockerignore"
+      - ".github/workflows/arm-image.yml"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build and boot on aarch64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confirm the runner really is ARM
+        run: |
+          set -eux
+          uname -m | grep -qx aarch64
+          docker version --format '{{.Server.Arch}}'
+
+      # A deliberately tiny corpus. This job exists to validate the *build* --
+      # aarch64 wheels resolving, npm ci picking @next/swc-linux-arm64-gnu, the
+      # static export, the runtime import path -- not to reproduce the served
+      # index. 200 rows does all of that in a fraction of the time, and the
+      # 20000-row build differs only in how long the embedding step runs.
+      - name: Build the image
+        run: |
+          docker build \
+            -f deploy/Dockerfile \
+            --build-arg INDEX_ROWS=200 \
+            -t voicerag:arm64 \
+            .
+
+      - name: Report image size
+        run: docker image inspect voicerag:arm64 --format '{{.Size}}' | awk '{printf "%.0f MB\n", $1/1024/1024}'
+
+      # The failure this catches is specific and has happened before: the image
+      # builds cleanly and then crash-loops on `ModuleNotFoundError: voicerag`
+      # because PYTHONPATH is unset for a src-layout package. A build-only job
+      # would have gone green through that.
+      - name: Boot it and wait for health
+        run: |
+          set -eux
+          docker run -d --name vr -p 8000:8000 voicerag:arm64
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8000/healthz >/dev/null 2>&1; then
+              echo "healthy after ~$((i*5))s"; exit 0
+            fi
+            sleep 5
+          done
+          echo "never became healthy"; docker logs vr; exit 1
+
+      - name: The frontend is served from the same origin
+        run: |
+          set -eux
+          # `/` must be the UI, not the JSON endpoint map -- that is the whole
+          # point of STATIC_DIR, and it is what makes the microphone work
+          # without any CORS configuration.
+          curl -fsS http://localhost:8000/ | grep -qi '<title>'
+          curl -fsS http://localhost:8000/ | grep -qi 'voicerag'
+          # The map moved here, and the API is not shadowed by the mount.
+          curl -fsS http://localhost:8000/api | grep -q '"endpoints"'
+          # A VAD asset, without which the mic button hangs on "Loading voice model…"
+          curl -fsS -o /dev/null -w '%{http_code}\n' http://localhost:8000/vad.worklet.bundle.min.js | grep -qx 200
+
+      - name: The rate limiter is on
+        run: |
+          set -eux
+          curl -fsS http://localhost:8000/healthz \
+            | python3 -c 'import json,sys; assert json.load(sys.stdin)["config"]["rate_limit"]["enabled"] is True; print("rate limiting enabled")'
+
+      - name: Logs on failure
+        if: failure()
+        run: docker logs vr || true
