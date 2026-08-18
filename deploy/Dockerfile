@@ -103,12 +103,28 @@ sys.exit(0)"
 
 # Settings field names, not VOICERAG_-prefixed: voicerag.config.Settings sets no
 # env_prefix, so a prefixed variable is silently discarded by `extra='ignore'`.
-ENV INDEX_DIR=/app/data/index \
+# PYTHONPATH, because this is a src-layout package (pyproject: where = ["src"])
+# that is never `pip install -e .`'d. The build-time ingest step survives only
+# because scripts/_bootstrap.py patches sys.path; the CMD below has no such
+# rescue, so without this line the image builds cleanly and then crash-loops on
+# `ModuleNotFoundError: voicerag`.
+#
+# The rest is not decoration. Any setting not named here falls back to
+# voicerag/config.py, whose defaults are the *benchmark* values, not the serving
+# ones -- and .env records what each wrong default does to a live answer
+# (BUDGET_TOTAL_MS=2500 "truncated slower answers mid-sentence and served the
+# fragment as a cited answer"; MAX_TOKENS=80 "truncated answers mid-clause").
+ENV PYTHONPATH=/app/src \
+    INDEX_DIR=/app/data/index \
     EMBEDDER_SPEC=static:/app/models/embedder \
     CHUNKING_STRATEGY=recursive \
     HOST=0.0.0.0 \
     PORT=8000 \
-    ENVIRONMENT=prod
+    ENVIRONMENT=prod \
+    BUDGET_TOTAL_MS=8000 \
+    BUDGET_GENERATE_MS=7400 \
+    MAX_TOKENS=160 \
+    MMAP_SPARSE=false
 
 RUN adduser --disabled-password --gecos "" --uid 10001 app \
  && chown -R app:app /app
