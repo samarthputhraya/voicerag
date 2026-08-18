@@ -38,6 +38,7 @@ is the correct shape for the stage, not because it rescues the budget.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -57,7 +58,10 @@ from .harness.resilience import AllProvidersFailed, BudgetExhausted, Deadline
 from .harness.trace import Span, Trace, traced
 from .index.hybrid import HybridIndex, RetrievalHit
 from .index.store import ChunkStore
+from .snippets import clean_snippet, looks_like_junk
 from .stt.speculative import normalise_query
+
+log = logging.getLogger("voicerag.pipeline")
 
 __all__ = [
     "Citation",
@@ -761,14 +765,26 @@ class RagPipeline:
                 if retrieval is None:
                     # Not "the corpus has nothing" -- we never finished looking.
                     # Saying so is the difference between an honest refusal and a
-                    # wrong one, and it points at the budget, which is the fix.
+                    # wrong one. The wording is for the person WATCHING: this
+                    # string is rendered on screen and read aloud by TTS. An
+                    # earlier version told them to "raise BUDGET_TOTAL_MS or use
+                    # a faster embedder than lsa:128" -- an ops hint naming an
+                    # embedder the system no longer even uses. Config advice
+                    # belongs in the log line, which is where it now goes.
+                    log.warning(
+                        "retrieval timed out after %.0f ms (budget %.0f ms); "
+                        "if this is a cold start, MMAP_SPARSE=false preloads "
+                        "the BM25 arrays and usually removes it",
+                        limit,
+                        self.settings.budget_total_ms,
+                    )
                     report = self.policy.report(question, input_verdict=input_verdict)
                     report.abstained = True
                     report.abstain_reason = (
-                        f"Retrieval did not finish within its {limit:.0f} ms slice of the "
-                        f"{self.settings.budget_total_ms:.0f} ms budget, so there is nothing "
-                        "to ground an answer on. Raise BUDGET_TOTAL_MS or use a faster "
-                        "embedder than " + self.settings.embedder_spec + "."
+                        f"The search ran out of time ({limit:.0f} ms) before any "
+                        "passages were retrieved, so there is nothing to ground an "
+                        "answer on. This usually only happens on the first request "
+                        "after a restart — asking again should work."
                     )
                     yield _final(
                         answer=report.abstain_reason,
@@ -1052,17 +1068,30 @@ def _citations(
         return []
     by_id = {h.chunk_id: h for h in hits}
     order = [n - 1 for n in dict.fromkeys(cited) if 1 <= n <= len(chunks)]
+    # Whether the answer actually cited decides how aggressive we may be below:
+    # a cited passage must survive, because its ``[n]`` marker has to point at
+    # something. An uncited one is only context, so junk can simply be dropped.
+    answer_cited = bool(order)
     if not order:
         order = list(range(len(chunks)))
     out: list[Citation] = []
     for i in order:
         chunk = chunks[i]
         hit = by_id.get(chunk.chunk_id)
+        # Scraped navigation furniture -- A-Z index strips, bare source URLs,
+        # flattened "related questions" rails -- is stripped here rather than in
+        # the client so that every consumer of the API gets the same clean
+        # evidence. Provably display-only: the model was prompted with
+        # ``prompt_texts`` and grounding verified against ``prompt_texts``;
+        # this field is read by nothing but a renderer.
+        text = clean_snippet(chunk.text)
+        if not answer_cited and looks_like_junk(text):
+            continue
         out.append(
             Citation(
                 chunk_id=chunk.chunk_id,
                 doc_id=chunk.doc_id,
-                text=chunk.text,
+                text=text,
                 score=round(float(hit.score) if hit is not None else 0.0, 6),
                 title=chunk.title or None,
             )
