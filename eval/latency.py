@@ -551,9 +551,16 @@ def report_to_markdown(report: LatencyReport) -> str:
     )
     out.append("")
     if report.simulated:
+        # The reason matters. This banner used to assert "No LLM credentials
+        # were available" unconditionally, which is a false statement in a
+        # published artifact whenever the run was simulated deliberately with a
+        # key present -- exactly the kind of claim this repo holds itself to.
+        reason = meta.get("simulated_reason") or (
+            "No LLM credentials were available."
+        )
         out.append(
-            "> **Generation is SIMULATED in this run.** No LLM credentials were "
-            f"available, so decode timing came from `{meta.get('profile', 'profile')}`. "
+            f"> **Generation is SIMULATED in this run.** {reason} Decode "
+            f"timing came from `{meta.get('profile', 'profile')}`. "
             "Retrieval, guardrail and prompt numbers are real measurements; the "
             "generation and total rows are a model of the provider, not an "
             "observation of it."

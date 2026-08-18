@@ -60,6 +60,7 @@ def _load_index(directory: Path) -> tuple[Any, Any, Any, list[str], dict[str, An
             built with returns confidently wrong passages, so this fails loudly
             rather than degrading.
     """
+    from voicerag.config import get_settings
     from voicerag.embed.base import resolve_embedder
     from voicerag.index.hybrid import HybridIndex
     from voicerag.index.store import ChunkStore
@@ -85,7 +86,15 @@ def _load_index(directory: Path) -> tuple[Any, Any, Any, list[str], dict[str, An
                 "index; rebuild with scripts/ingest.py"
             )
 
-    hybrid = HybridIndex.load(directory)
+    # Load the index the way the SERVER loads it. This used to call
+    # HybridIndex.load(directory) bare, which takes mmap_sparse=True by default
+    # while api/state.py passes Settings.mmap_sparse -- so the published
+    # benchmark measured a configuration the deployment does not run. It
+    # measured the slower one: memory-mapped BM25 page-faults on first touch
+    # against the 956k index, costing ~130 ms of retrieve that a preloaded
+    # index does not pay. The headline latency number was therefore understating
+    # the served system by roughly 5x on the sparse leg.
+    hybrid = HybridIndex.load(directory, mmap_sparse=get_settings().mmap_sparse)
     store = ChunkStore.load(directory / "store")
     queries = [q["eng_query"] for q in manifest.get("queries", []) if q.get("eng_query")]
     return embedder, hybrid, store, queries, manifest
@@ -169,14 +178,26 @@ def _calibrated_policy(
     return GuardrailPolicy(abstention=gate)
 
 
-def _generator(args: argparse.Namespace) -> Any:
-    """Pick the real generator when credentials exist, else the simulated one."""
+def _generator(args: argparse.Namespace) -> tuple[Any, str | None]:
+    """Pick the real generator when credentials exist, else the simulated one.
+
+    Returns:
+        ``(generator, simulated_reason)``. ``simulated_reason`` is ``None`` for a
+        real provider and otherwise a phrase naming *why* the run was simulated,
+        so the published report can say so accurately instead of assuming.
+    """
     key = os.getenv("GROQ_API_KEY", "")
     if key and not args.force_simulated:
         from voicerag.generate.groq import GroqGenerator
 
-        return GroqGenerator(api_key=key, max_tokens=args.max_tokens)
-    return SimulatedGenerator(GROQ_GPT_OSS_20B_PROFILE, max_tokens=args.max_tokens)
+        return GroqGenerator(api_key=key, max_tokens=args.max_tokens), None
+    reason = (
+        "The decoder was pinned to the simulated profile with --force-simulated, "
+        "so the run is reproducible and consumes no provider quota."
+        if args.force_simulated
+        else "No LLM credentials were available."
+    )
+    return SimulatedGenerator(GROQ_GPT_OSS_20B_PROFILE, max_tokens=args.max_tokens), reason
 
 
 async def main(argv: list[str] | None = None) -> int:
@@ -224,11 +245,12 @@ async def main(argv: list[str] | None = None) -> int:
     if not args.no_guardrails and not args.no_calibrate:
         policy = _calibrated_policy(embedder, hybrid, manifest)
 
+    generator, simulated_reason = _generator(args)
     pipeline = PipelineBenchmark(
         embedder,
         hybrid,
         store,
-        _generator(args),
+        generator,
         k=args.k,
         use_guardrails=not args.no_guardrails,
         policy=policy,
@@ -246,7 +268,7 @@ async def main(argv: list[str] | None = None) -> int:
         iterations=args.iterations,
         warmup=args.warmup,
         target_ms=args.target_ms,
-        meta={"index": manifest},
+        meta={"index": manifest, "simulated_reason": simulated_reason},
         progress=lambda msg: print(f"  {msg}", flush=True),
     )
     report.with_client_measurements(
