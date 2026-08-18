@@ -90,7 +90,25 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000"],
         description=(
             "Allowed browser origins, comma-separated or as a JSON array. The "
-            "demo frontend runs on :3000."
+            "demo frontend runs on :3000. Irrelevant when STATIC_DIR is set and "
+            "the frontend is served from this origin -- which is the point of "
+            "serving it from this origin."
+        ),
+    )
+    static_dir: Path | None = Field(
+        default=None,
+        description=(
+            "Directory of a built frontend (`web/out`, from `next build` with "
+            "output: 'export'). When set and present, it is mounted at / and "
+            "the endpoint map moves to /api; when unset the API serves JSON at "
+            "/ exactly as before, which is what local development wants because "
+            "`next dev` is already serving the frontend on :3000.\n\n"
+            "Same-origin is not a convenience. CORS does not apply to WebSocket "
+            "upgrades, so `stt_relay._origin_allowed` is the only thing gating "
+            "the relay, and a cross-origin deployment that forgets to name its "
+            "frontend in CORS_ORIGINS gets a microphone button that lights up, "
+            "a waveform that moves, and no transcript that ever arrives. Served "
+            "from one origin there is nothing to forget."
         ),
     )
 
@@ -232,6 +250,70 @@ class Settings(BaseSettings):
         ),
     )
 
+    # -- rate limiting --------------------------------------------------------
+    # Sized for a public demo link, not for throughput. The binding external
+    # constraint is Groq's free tier: 8,000 tokens/minute, and one RAG answer
+    # costs roughly 1,400 (five passages of prompt plus MAX_TOKENS of output),
+    # so the quota sustains about five questions a minute. The limits below sit
+    # well *above* that on purpose -- their job is to stop a scraper, not to
+    # ration a judge, and Groq enforces its own ceiling with a 429 that the
+    # circuit breaker already handles.
+    #
+    # See :mod:`voicerag.api.ratelimit` for why the per-client numbers are
+    # advisory and the global ones are not.
+
+    rate_limit_enabled: bool = Field(
+        default=True,
+        description=(
+            "Apply the limits below. On by default: the value of a limiter that "
+            "has to be remembered at deploy time is zero."
+        ),
+    )
+    rate_limit_trust_forwarded_for: bool = Field(
+        default=True,
+        description=(
+            "Identify clients by the leftmost X-Forwarded-For entry. Required "
+            "behind any platform proxy, where the socket peer is the same "
+            "gateway address for every visitor. The header is client-written, "
+            "so this buys granularity, not security -- the global limits are "
+            "the part that cannot be spoofed."
+        ),
+    )
+    rate_limit_max_clients: int = Field(
+        default=4096,
+        ge=16,
+        description=(
+            "Distinct identities tracked, evicted least-recently-used. Bounds "
+            "the memory a client rotating X-Forwarded-For can make us allocate."
+        ),
+    )
+    #: /ask and /ask/stream -- the only endpoints that spend LLM tokens.
+    rate_limit_generate_per_min: int = Field(default=15, ge=1)
+    rate_limit_generate_global_per_min: int = Field(default=45, ge=1)
+    #: /speak -- Sarvam TTS, billed per character.
+    rate_limit_speak_per_min: int = Field(default=30, ge=1)
+    rate_limit_speak_global_per_min: int = Field(default=90, ge=1)
+    #: /speculate, /examples, /stats, /stt/token. Generous because the browser
+    #: fires /speculate once per transcript revision while the user is still
+    #: speaking -- five to fifteen calls for a single spoken question.
+    rate_limit_light_per_min: int = Field(default=240, ge=1)
+    rate_limit_light_global_per_min: int = Field(default=900, ge=1)
+    #: WS /stt/stream. The browser VAD opens a fresh socket per utterance, and
+    #: again after each idle timeout, so the *rate* must be permissive; the
+    #: concurrency caps below are what actually protect the Sarvam account.
+    rate_limit_stt_per_min: int = Field(default=30, ge=1)
+    rate_limit_stt_global_per_min: int = Field(default=120, ge=1)
+    rate_limit_stt_concurrent: int = Field(
+        default=3,
+        ge=1,
+        description=(
+            "Simultaneous relay sessions per client. A rate limit alone cannot "
+            "bound this: ten sockets opened in one second are under every "
+            "per-minute limit and hold ten upstream sessions for two minutes."
+        ),
+    )
+    rate_limit_stt_concurrent_total: int = Field(default=12, ge=1)
+
     # -- feature flags --------------------------------------------------------
 
     enable_guardrails: bool = True
@@ -293,7 +375,7 @@ class Settings(BaseSettings):
             return [item.strip() for item in stripped.split(",") if item.strip()]
         return value
 
-    @field_validator("index_dir", "guardrail_policy_file")
+    @field_validator("index_dir", "guardrail_policy_file", "static_dir")
     @classmethod
     def _absolutise(cls, value: Path | None) -> Path | None:
         """Resolve relative paths against the repo root, not the CWD.
@@ -338,8 +420,19 @@ class Settings(BaseSettings):
         }
 
     def has_generation_provider(self) -> bool:
-        """True if at least one LLM credential is configured."""
-        return self.groq_api_key is not None or self.gemini_api_key is not None
+        """True if at least one LLM credential is configured.
+
+        The list must match what :func:`voicerag.api.state.build_generators`
+        actually constructs. It did not: OpenAI was wired there and missing here,
+        so a deployment holding only an ``OPENAI_API_KEY`` -- the documented
+        fallback for when Groq's free tier is exhausted -- reported itself as
+        having no generation provider while serving answers perfectly well.
+        """
+        return (
+            self.groq_api_key is not None
+            or self.openai_api_key is not None
+            or self.gemini_api_key is not None
+        )
 
     def public_dict(self) -> dict[str, Any]:
         """Configuration safe to serialise into a health or stats response.

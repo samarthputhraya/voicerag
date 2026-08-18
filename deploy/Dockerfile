@@ -1,4 +1,9 @@
-# VoiceRAG API image.
+# VoiceRAG image: the demo UI and the API, from one origin, in one container.
+#
+# Two stages. The first builds the Next.js frontend to a static export; the
+# second is the Python API, which serves that export at `/` (STATIC_DIR) and the
+# endpoint map at `/api`. One origin is a requirement rather than a preference --
+# see the frontend stage's comment for why the microphone depends on it.
 #
 # Two properties drive every choice here:
 #
@@ -25,6 +30,51 @@
 # Build locally with the second, which is also the honest one to show a judge:
 #   docker build -f deploy/Dockerfile --build-arg INDEX_ROWS=20000 -t voicerag .
 
+# --- frontend ------------------------------------------------------------------
+# The demo UI is built here and copied into the final image, so one container
+# serves the page and the API from one origin.
+#
+# That is not packaging convenience, it is the microphone working. CORS does not
+# apply to WebSocket upgrades, so `stt_relay._origin_allowed` is the only gate on
+# WS /stt/stream -- and a split deployment whose CORS_ORIGINS does not name the
+# frontend produces the worst-looking failure in this project: the mic button
+# lights, the waveform moves, and no transcript ever arrives, because the upgrade
+# was closed with 1008 before Sarvam was dialled. Same-origin has nothing to
+# misconfigure. (The relay also allows same-origin explicitly, because a Space's
+# hostname is not knowable at build time; see _origin_allowed.)
+FROM node:22-slim AS frontend
+
+WORKDIR /web
+
+# Dependencies first, so a change to page.tsx does not re-resolve the tree.
+#
+# `web/scripts` is copied *with* the manifests and not with the sources below,
+# because package.json's `postinstall` runs `node scripts/copy-vad-assets.mjs`.
+# With only the manifests present, npm ci fails on a missing module -- and it
+# would fail here and nowhere else, since a developer's tree always has the file.
+COPY web/package.json web/package-lock.json ./
+COPY web/scripts ./scripts
+RUN npm ci
+
+COPY web/ ./
+
+# `web/public` is excluded from the build context on purpose (see .dockerignore):
+# the VAD worklet, the Silero ONNX weights and the onnxruntime WASM binaries are
+# not in git, and this is what puts them in the image. Without them the mic
+# button hangs on "Loading voice model..." forever, behind a 404 that never
+# surfaces in the React tree.
+RUN npm run vad-assets
+
+# Empty means same origin, i.e. relative URLs. Belt and braces: resolveApiBase()
+# in web/lib/api.ts also lands on same-origin for any production build with the
+# variable unset, precisely so that forgetting this line cannot bake
+# `http://localhost:8000` into a public page -- which would make the deployed
+# demo call the *visitor's* machine and look like the server was down.
+ENV NEXT_PUBLIC_API_BASE=""
+RUN npm run build && test -f out/index.html
+
+
+# --- api -----------------------------------------------------------------------
 FROM python:3.11-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
@@ -114,17 +164,31 @@ sys.exit(0)"
 # ones -- and .env records what each wrong default does to a live answer
 # (BUDGET_TOTAL_MS=2500 "truncated slower answers mid-sentence and served the
 # fragment as a cited answer"; MAX_TOKENS=80 "truncated answers mid-clause").
+# --- frontend ------------------------------------------------------------------
+# The static export from the node stage. Copied before the chown below so the
+# runtime user owns it too.
+COPY --from=frontend /web/out /app/web
+
 ENV PYTHONPATH=/app/src \
     INDEX_DIR=/app/data/index \
     EMBEDDER_SPEC=static:/app/models/embedder \
     CHUNKING_STRATEGY=recursive \
+    STATIC_DIR=/app/web \
     HOST=0.0.0.0 \
     PORT=8000 \
     ENVIRONMENT=prod \
     BUDGET_TOTAL_MS=8000 \
     BUDGET_GENERATE_MS=7400 \
     MAX_TOKENS=160 \
-    MMAP_SPARSE=false
+    MMAP_SPARSE=false \
+    RATE_LIMIT_ENABLED=true
+
+# CORS_ORIGINS is deliberately NOT set. This image serves the frontend from its
+# own origin, so browser fetches are same-origin and CORS never applies, and the
+# relay allows same-origin upgrades on its own (see stt_relay._origin_allowed) --
+# which it has to, because a Space's hostname does not exist at build time.
+# Set it only when deploying the frontend somewhere else, and then set it to that
+# frontend's origin.
 
 RUN adduser --disabled-password --gecos "" --uid 10001 app \
  && chown -R app:app /app

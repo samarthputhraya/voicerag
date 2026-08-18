@@ -67,17 +67,31 @@ services:
       # 200 ms deadline the pipeline truncates every answer after about one word.
       # The 200 ms claim is measured separately by scripts/bench_latency.py,
       # which passes it explicitly. See the README's latency section.
+      #
+      # These were 2500/2200 with no MAX_TOKENS, which is the *benchmark* shape,
+      # not the serving one -- and an envVar here OVERRIDES the Dockerfile ENV,
+      # so this file silently reintroduced the defect the image had already
+      # fixed: answers truncated mid-sentence, with their citations still
+      # attached. A judge would have read a confidently-cited fragment.
       - key: BUDGET_TOTAL_MS
-        value: "2500"
+        value: "8000"
       - key: BUDGET_GENERATE_MS
-        value: "2200"
+        value: "7400"
       - key: BUDGET_RETRIEVE_MS
         value: "25"
+      - key: MAX_TOKENS
+        value: "160"
+      # Memory-mapped BM25 page-faults on first touch, which cost ~100 ms and
+      # produced an outright retrieval timeout on the first question after a
+      # restart. Preloading costs RAM and removes it.
+      - key: MMAP_SPARSE
+        value: "false"
 
       - key: ENABLE_SPECULATIVE_RETRIEVAL
         value: "true"
 
-      # Comma-separated origins allowed to call this API. The WebSocket relay
-      # does its own origin check -- CORS does not apply to WS upgrades.
-      - key: CORS_ORIGINS
-        value: "https://voicerag.vercel.app,http://localhost:3000"
+      # The image builds the frontend and serves it from this same origin, so
+      # there is no second host to allow and CORS does not enter into it. This
+      # previously named a Vercel app that the deployment does not use.
+      - key: STATIC_DIR
+        value: /app/web

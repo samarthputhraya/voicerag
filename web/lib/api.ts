@@ -6,8 +6,36 @@
  * first token the instant it exists rather than waiting for a finished response.
  */
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, "") ?? "http://localhost:8000";
+/**
+ * Base URL for every call to the backend, resolved once at module load.
+ *
+ * Three cases, and the ordering is what makes a misconfigured deploy fail safe:
+ *
+ * - **Set to a URL** — use it. Two origins, so CORS and the relay's own origin
+ *   check both apply and both have to name it.
+ * - **Set to the empty string, or unset in a production build** — same origin,
+ *   i.e. relative URLs. This is what the container serves: the API hosts the
+ *   static export itself, so `/ask` is on the page's own origin, there is no
+ *   CORS to configure and no second hostname to keep in sync.
+ * - **Unset under `next dev`** — `http://localhost:8000`, because the dev
+ *   server is on :3000 and the API is not.
+ *
+ * `NODE_ENV` is the discriminator rather than a second public variable because
+ * Next inlines it at build time exactly like the `NEXT_PUBLIC_` one. What it
+ * buys is the default in the third line: previously a missing variable baked
+ * `http://localhost:8000` into the production bundle, so the deployed page
+ * called *the visitor's own machine* and failed in a way that looks like the
+ * server is down rather than like a build-arg that was not passed.
+ */
+function resolveApiBase(): string {
+  const configured = process.env.NEXT_PUBLIC_API_BASE;
+  if (configured) return configured.replace(/\/$/, "");
+  if (configured === "") return "";
+  return process.env.NODE_ENV === "development" ? "http://localhost:8000" : "";
+}
+
+/** Exported so the STT client resolves the relay against the same base. */
+export const API_BASE = resolveApiBase();
 
 export interface Citation {
   chunk_id: string;

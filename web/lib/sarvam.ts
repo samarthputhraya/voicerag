@@ -19,6 +19,8 @@
  * the alternative is shipping the account key to every visitor.
  */
 
+import { API_BASE } from "./api";
+
 export type TranscriptEventKind =
   | "session_begin"
   | "speech_start"
@@ -78,13 +80,26 @@ export interface SarvamConfig {
 
 /**
  * The relay endpoint on our own API, derived from the same base URL the REST
- * client uses so a deployment configures one variable, not two. http -> ws and
- * https -> wss, because a page served over TLS cannot open an insecure socket.
+ * client uses so a deployment configures one variable, not two.
+ *
+ * Two things here are not incidental.
+ *
+ * **It is called lazily, not at module scope.** This module is imported by a
+ * client component that Next still prerenders to HTML in Node at build time, so
+ * touching `window` while the module body runs is a build failure, not a
+ * runtime one. Resolution happens on `connect()`, in the browser.
+ *
+ * **The same-origin case is built from `window.location`, not left relative.**
+ * When the API serves the frontend, `API_BASE` is `""`; a naive
+ * `"".replace(/^http/, "ws")` yields `"/stt/stream"`, and a relative URL in the
+ * `WebSocket` constructor is not something to rely on across browsers. The
+ * scheme has to be derived anyway — a page served over TLS cannot open an
+ * insecure socket — and `location.protocol` is exactly the right source for it.
  */
 function defaultRelayUrl(): string {
-  const base =
-    process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, "") ?? "http://localhost:8000";
-  return `${base.replace(/^http/, "ws")}/stt/stream`;
+  if (API_BASE) return `${API_BASE.replace(/^http/, "ws")}/stt/stream`;
+  const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${scheme}//${window.location.host}/stt/stream`;
 }
 
 const DEFAULTS = {
@@ -95,7 +110,8 @@ const DEFAULTS = {
   minSpeechDurationMs: 250,
   endpointing: "vad" as const,
   mode: "transcribe" as const,
-  baseUrl: defaultRelayUrl(),
+  //: Resolved on first use rather than here; see `defaultRelayUrl`.
+  baseUrl: "",
 };
 
 /** Float32 PCM in [-1, 1] -> little-endian 16-bit PCM, which is what Sarvam wants. */
@@ -146,7 +162,7 @@ export class SarvamRealtimeStt {
       silence_duration_ms: String(this.cfg.silenceDurationMs),
       min_speech_duration_ms: String(this.cfg.minSpeechDurationMs),
     });
-    return `${this.cfg.baseUrl}?${q.toString()}`;
+    return `${this.cfg.baseUrl || defaultRelayUrl()}?${q.toString()}`;
   }
 
   /** Open the socket. Resolves once the server acknowledges the session. */

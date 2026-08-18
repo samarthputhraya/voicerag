@@ -43,7 +43,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -131,7 +131,7 @@ def _upstream_url(cfg: Settings, client_params: dict[str, str]) -> str:
 _MAX_SESSION_S = 120.0
 
 
-def _origin_allowed(origin: str, cfg: Settings) -> bool:
+def _origin_allowed(origin: str, cfg: Settings, host: str = "") -> bool:
     """Whether a WebSocket upgrade from ``origin`` may proceed.
 
     CORS does **not** apply to WebSocket upgrades -- ``CORSMiddleware`` protects
@@ -143,13 +143,60 @@ def _origin_allowed(origin: str, cfg: Settings) -> bool:
     ``websockets`` from a script) do not send one, and they are not the threat
     model -- a malicious script can send any Origin it likes anyway. The check
     exists to stop *other people's web pages* silently using this relay.
+
+    **Same-origin is always allowed**, whatever ``CORS_ORIGINS`` says. When the
+    API serves the frontend itself the page's origin is the deployment's own
+    hostname, which is not knowable at build time and so cannot be baked into
+    the image -- and getting it wrong has a singularly bad failure mode: the
+    microphone button lights, the waveform moves, and no transcript ever
+    arrives, because the upgrade was closed with 1008 before Sarvam was ever
+    dialled. It reads as a broken microphone rather than as a missing
+    environment variable. Allowing it costs nothing, because the whole purpose
+    of the check is to exclude *other* origins, and a browser will not let a
+    page forge this header.
+
+    Args:
+        origin: The ``Origin`` request header.
+        cfg: Settings supplying the allow-list.
+        host: The host this request arrived on -- ``X-Forwarded-Host`` if a proxy
+            set one, else ``Host``. Empty disables the same-origin allowance.
     """
     if not origin:
         return True
     allowed = list(cfg.cors_origins or [])
     if "*" in allowed:
         return True
-    return origin.rstrip("/") in {o.rstrip("/") for o in allowed}
+    if origin.rstrip("/") in {o.rstrip("/") for o in allowed}:
+        return True
+    return _same_origin(origin, host)
+
+
+def _same_origin(origin: str, host: str) -> bool:
+    """Whether ``origin`` names the very host the request arrived on.
+
+    Compares authorities (``host:port``), not full URLs: the ``Origin`` header
+    carries a scheme and the ``Host`` header does not, so there is nothing to
+    compare a scheme against. That is the correct comparison anyway -- a proxy
+    terminating TLS makes the page's ``https`` and the container's view of the
+    connection disagree by design.
+    """
+    if not origin or not host:
+        return False
+    # A proxy may forward a comma-separated list; the first entry is the one the
+    # browser actually asked for.
+    first = host.split(",")[0].strip()
+    try:
+        netloc = urlsplit(origin).netloc
+    except ValueError:
+        # `urlsplit` raises on a malformed authority -- `http://[::1` is
+        # "Invalid IPv6 URL". This runs *before* `ws.accept()` on an
+        # unauthenticated upgrade, and ServerErrorMiddleware passes non-HTTP
+        # scopes straight through, so an escaping exception becomes a bare 500
+        # plus a full traceback per connection: free log spam on a public link,
+        # from one header. An Origin that does not parse is, by definition, not
+        # this deployment's own origin.
+        return False
+    return netloc.casefold() == first.casefold()
 
 
 async def relay_sarvam(ws: WebSocket, cfg: Settings) -> None:
@@ -160,8 +207,12 @@ async def relay_sarvam(ws: WebSocket, cfg: Settings) -> None:
         cfg: Settings supplying the account key and model defaults.
     """
     origin = ws.headers.get("origin", "")
-    if not _origin_allowed(origin, cfg):
-        log.warning("stt relay refused origin %r", origin)
+    # X-Forwarded-Host first: behind a platform proxy the Host header is the
+    # container's internal name, and comparing the page's origin against that
+    # would reject the very deployment serving the page.
+    host = ws.headers.get("x-forwarded-host") or ws.headers.get("host", "")
+    if not _origin_allowed(origin, cfg, host):
+        log.warning("stt relay refused origin %r (host %r)", origin, host)
         # Refuse before the handshake completes. Accepting and then closing
         # would still have opened a socket on our side.
         await ws.close(code=1008)

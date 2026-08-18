@@ -425,7 +425,10 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt
 cp .env.example .env    # add SARVAM_API_KEY and GROQ_API_KEY
 
 # Build an index. ~200k passages from a single 440MB shard, not the 55.6GB dump.
-python scripts/ingest.py --limit 20000 --strategy sentence_window --out data/index
+# `recursive` because it won the ablation (reports/ablation.md), and because it
+# is what the served index is built with -- building with anything else here
+# gives you a demo that does not match a single published number.
+python scripts/ingest.py --limit 20000 --strategy recursive --out data/index_20k
 
 # Prove it works, offline, with no API keys:
 python scripts/smoke.py
@@ -437,6 +440,39 @@ python scripts/bench_latency.py --iterations 200 --out reports/latency.json
 uvicorn voicerag.api.main:app --reload      # API  :8000
 cd web && npm install && npm run dev        # UI   :3000
 ```
+
+### Deploy
+
+One container serves the UI and the API from **one origin**: the Dockerfile
+builds the Next.js app to a static export and the API serves it at `/`, with the
+endpoint map at `/api`.
+
+That is a requirement, not packaging preference. CORS does not apply to
+WebSocket upgrades, so the origin check in `stt_relay` is the only gate on
+`WS /stt/stream` — and a split deployment whose `CORS_ORIGINS` omits the
+frontend produces the worst-looking failure available: the microphone lights up,
+the waveform moves, and no transcript ever arrives. Same-origin has nothing left
+to misconfigure.
+
+```bash
+docker build -f deploy/Dockerfile --build-arg INDEX_ROWS=20000 -t voicerag .
+docker run -p 8000:8000 -e SARVAM_API_KEY=... -e GROQ_API_KEY=... voicerag
+```
+
+Hugging Face Spaces (CPU Basic: 16 GB at no hourly cost, though *creating* a
+Docker Space requires a paid plan — Render's 512 MB `starter` OOMs on this
+index, and its `standard` is paid too):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\huggingface\push_space.ps1 -User <hf-user>
+```
+
+Every endpoint that spends a third-party token is rate limited, because the link
+is public and the credentials are on a free tier. Per-client limits key on
+`X-Forwarded-For` and are therefore advisory; the global limits are what protect
+the quota, because they count requests rather than identities. See
+`src/voicerag/api/ratelimit.py`, and `config.rate_limit` in `/healthz` for what
+a running deployment is actually enforcing.
 
 ### Dataset
 
@@ -516,12 +552,15 @@ src/voicerag/
   guardrails/   input · abstention · grounding · policy
   harness/      trace · deadline · retry · circuit breaker · fallback
   stt/          sarvam · elevenlabs · speculative driver
-  generate/     groq · gemini · prompt · router
+  generate/     groq · openai · gemini · prompt · router
   pipeline.py   the orchestrated request path
-  api/          FastAPI: /ask /ask/stream /speculate /stt/token /healthz /stats
+  api/          FastAPI: /ask /ask/stream /speculate /speak /examples
+                /stt/token /stt/stream /healthz /stats /api · rate limiting
+                · the static frontend mount
 eval/           dataset · metrics · ablation · latency · abstention_eval
-web/            Next.js voice UI with live latency HUD
-deploy/         Dockerfile · render.yaml
+web/            Next.js voice UI with live latency HUD; static-exported and
+                served by the API from the same origin
+deploy/         Dockerfile (frontend + API) · huggingface/ · render.yaml
 ```
 
 ## License and attribution

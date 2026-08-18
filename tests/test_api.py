@@ -377,17 +377,31 @@ class TestOperational:
         assert body["recent_latency"]["p100"] >= body["recent_latency"]["p50"]
 
     def test_root_lists_every_endpoint(self, corpus: Any) -> None:
+        """Checked against the router, not against a second copy of the answer.
+
+        This test used to assert a hand-written set of six paths -- and the map
+        had meanwhile drifted to omit ``/speak``, ``/examples`` and the relay, so
+        a judge reading it would have concluded that speech synthesis and the
+        microphone endpoint did not exist. A hard-coded expectation cannot catch
+        that, because it is the same hand-written list twice. Deriving it from
+        the application's own routes is what makes the *next* omission fail here
+        rather than on camera.
+        """
+        #: Deliberately absent from the map: the map itself, and the docs routes
+        #: FastAPI generates.
+        map_omits = {"/", "/api", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"}
+
         client, _ = make_client(corpus, ScriptedGenerator(ANSWER))
         with client:
             body = client.get("/").json()
-        assert set(body["endpoints"]) == {
-            "POST /ask",
-            "POST /ask/stream",
-            "POST /speculate",
-            "GET /healthz",
-            "GET /stats",
-            "POST /stt/token",
+
+        documented = {entry.split(" ", 1)[1] for entry in body["endpoints"]}
+        registered = {
+            route.path  # type: ignore[attr-defined]
+            for route in client.app.routes  # type: ignore[attr-defined]
+            if getattr(route, "path", None) and route.path not in map_omits
         }
+        assert documented == registered
 
     def test_cors_headers_come_from_settings(self, corpus: Any) -> None:
         client, _ = make_client(
@@ -402,6 +416,82 @@ class TestOperational:
                 },
             )
         assert response.headers["access-control-allow-origin"] == "https://demo.example"
+
+
+# --- serving the frontend from this origin ------------------------------------
+
+
+class TestFrontendMount:
+    """``STATIC_DIR``: the deployed image serves the UI and the API together.
+
+    Same-origin is the whole point. CORS does not apply to WebSocket upgrades, so
+    ``stt_relay._origin_allowed`` is the only gate on the relay, and a split
+    deployment that forgets to name its frontend origin produces a microphone
+    button that lights up, a waveform that moves, and a transcript that never
+    arrives. Served from one origin there is nothing left to misconfigure -- but
+    only if the mount does not shadow the API, which is what these assert.
+    """
+
+    def _export(self, tmp_path: Any, body: str = "<!doctype html><title>ui</title>") -> Any:
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / "index.html").write_text(body, encoding="utf-8")
+        (out / "_next").mkdir()
+        (out / "_next" / "app.js").write_text("// bundle", encoding="utf-8")
+        return out
+
+    def test_without_static_dir_root_is_the_endpoint_map(self, corpus: Any) -> None:
+        """Local development is untouched: `next dev` already serves :3000."""
+        client, _ = make_client(corpus, ScriptedGenerator(ANSWER))
+        with client:
+            assert "endpoints" in client.get("/").json()
+            assert "endpoints" in client.get("/api").json()
+
+    def test_with_static_dir_root_is_the_frontend(self, corpus: Any, tmp_path: Any) -> None:
+        client, _ = make_client(
+            corpus, ScriptedGenerator(ANSWER), static_dir=self._export(tmp_path)
+        )
+        with client:
+            root = client.get("/")
+            assert root.status_code == 200
+            assert root.headers["content-type"].startswith("text/html")
+            assert "<title>ui</title>" in root.text
+            # The map is still reachable, at a path that does not move.
+            assert "endpoints" in client.get("/api").json()
+
+    def test_the_mount_does_not_shadow_the_api(self, corpus: Any, tmp_path: Any) -> None:
+        """A ``Mount("/")`` matches every path; only registration order saves us.
+
+        Starlette matches routes in the order they were added, so the mount is
+        installed last and sees only what the API routes did not claim. Get that
+        backwards and every endpoint in the service returns the HTML page with a
+        200, which would look -- to a browser, and to a judge -- like the API had
+        silently stopped answering.
+        """
+        client, _ = make_client(
+            corpus, ScriptedGenerator(ANSWER), static_dir=self._export(tmp_path)
+        )
+        with client:
+            answered = client.post("/ask", json={"question": QUESTION})
+            assert answered.status_code == 200
+            assert answered.json()["answer"] == ANSWER
+            assert client.get("/healthz").json()["status"] == "ok"
+            assert client.get("/stats").status_code == 200
+            # And static assets below the root are served.
+            assert client.get("/_next/app.js").status_code == 200
+
+    def test_missing_index_falls_back_to_the_api(self, corpus: Any, tmp_path: Any) -> None:
+        """A build that produced nothing must not take the API down with it.
+
+        The alternative -- refusing to boot over an optional UI -- turns a
+        cosmetic build failure into a total outage.
+        """
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        client, _ = make_client(corpus, ScriptedGenerator(ANSWER), static_dir=empty)
+        with client:
+            assert "endpoints" in client.get("/").json()
+            assert client.post("/ask", json={"question": QUESTION}).status_code == 200
 
 
 # --- /stt/token ---------------------------------------------------------------
@@ -502,6 +592,124 @@ class TestSttRelay:
             # No Sarvam key configured in this fixture, so the relay reports
             # that rather than dialling out -- which is proof the origin passed.
             assert ws.receive_json()["code"] == "stt_unconfigured"
+
+    def test_allows_same_origin_even_when_cors_origins_does_not_name_it(
+        self, corpus: Any
+    ) -> None:
+        """The deployed image serves the page and the relay from one hostname.
+
+        That hostname is not knowable when the image is built, so it cannot be
+        baked into ``CORS_ORIGINS`` -- and the failure when it is missing is the
+        worst-looking one in the project: the microphone lights up, the waveform
+        moves, and no transcript ever arrives, because the upgrade was closed
+        with 1008 before Sarvam was dialled. It reads as a broken microphone
+        rather than as an unset environment variable.
+        """
+        client, _ = make_client(
+            corpus,
+            ScriptedGenerator(ANSWER),
+            cors_origins=["https://something-else.example"],
+        )
+        with client, client.websocket_connect(
+            "/stt/stream", headers={"origin": "http://testserver"}
+        ) as ws:
+            assert ws.receive_json()["code"] == "stt_unconfigured"
+
+    def test_same_origin_uses_the_forwarded_host_behind_a_proxy(
+        self, corpus: Any
+    ) -> None:
+        """Behind a platform proxy, ``Host`` is the container's internal name.
+
+        Comparing the page's origin against that would reject the very
+        deployment serving the page, so ``X-Forwarded-Host`` wins when present.
+        """
+        client, _ = make_client(corpus, ScriptedGenerator(ANSWER), cors_origins=[])
+        with client, client.websocket_connect(
+            "/stt/stream",
+            headers={
+                "origin": "https://user-voicerag.hf.space",
+                "x-forwarded-host": "user-voicerag.hf.space",
+            },
+        ) as ws:
+            assert ws.receive_json()["code"] == "stt_unconfigured"
+
+    def test_a_third_party_origin_is_still_refused(self, corpus: Any) -> None:
+        """The same-origin allowance must not become an open door.
+
+        An origin that matches neither the allow-list nor this request's own host
+        is exactly the case the check exists for.
+        """
+        client, _ = make_client(corpus, ScriptedGenerator(ANSWER), cors_origins=[])
+        with client:
+            with pytest.raises(Exception):
+                with client.websocket_connect(
+                    "/stt/stream",
+                    headers={
+                        "origin": "https://evil.example",
+                        "x-forwarded-host": "user-voicerag.hf.space",
+                    },
+                ):
+                    pass
+
+    def test_same_origin_comparison_is_authority_only(self) -> None:
+        """Scheme is not compared, and cannot be: ``Host`` does not carry one.
+
+        A proxy terminating TLS makes the page's ``https`` and the container's
+        view of the connection disagree by design, so an authority comparison is
+        the correct one rather than a lenient one. The port is part of the
+        authority and is compared.
+        """
+        from voicerag.api.stt_relay import _same_origin
+
+        assert _same_origin("https://demo.example", "demo.example")
+        assert _same_origin("http://demo.example", "demo.example")
+        assert _same_origin("http://localhost:3000", "localhost:3000")
+        assert _same_origin("https://DEMO.example", "demo.example")
+        # A forwarded list keeps the entry the browser actually asked for.
+        assert _same_origin("https://demo.example", "demo.example, internal:8000")
+
+        assert not _same_origin("http://localhost:3000", "localhost:8000")
+        assert not _same_origin("https://evil.example", "demo.example")
+        assert not _same_origin("https://demo.example.evil.com", "demo.example")
+        assert not _same_origin("https://demo.example", "")
+        assert not _same_origin("", "demo.example")
+
+    def test_a_malformed_origin_fails_closed_instead_of_raising(self) -> None:
+        """``urlsplit`` raises on a bad authority; this runs before ``accept``.
+
+        ``urlsplit("http://[::1")`` is ``ValueError: Invalid IPv6 URL``. The
+        check runs on an unauthenticated upgrade *before* the socket is
+        accepted, and ``ServerErrorMiddleware`` forwards non-HTTP scopes
+        untouched — so an escaping exception is a bare 500 plus a full traceback
+        per connection, on a public link, from a single header.
+        """
+        from voicerag.api.stt_relay import _same_origin
+
+        for bad in ("http://[::1", "http://[", "http://[]:x", "://nope", "http://a b"):
+            assert _same_origin(bad, "demo.example") is False
+
+    def test_a_websocket_to_an_unrouted_path_does_not_500(
+        self, corpus: Any, tmp_path: Any
+    ) -> None:
+        """``Mount`` matches websocket scopes; ``StaticFiles`` asserts http.
+
+        With a frontend mounted at ``/``, an upgrade to any unrouted path used
+        to reach the mount and raise ``AssertionError``, which nothing catches.
+        A refused handshake is correct; a traceback per attempt is a log a
+        stranger can fill.
+        """
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / "index.html").write_text("<!doctype html><title>ui</title>", encoding="utf-8")
+        client, _ = make_client(corpus, ScriptedGenerator(ANSWER), static_dir=out)
+        with client:
+            for path in ("/does-not-exist", "/ask", "/_next/chunk.js"):
+                with pytest.raises(Exception) as caught:
+                    with client.websocket_connect(path):
+                        pass
+                assert not isinstance(caught.value, AssertionError), path
+            # The real relay still works, and the page is still served.
+            assert client.get("/").status_code == 200
 
     def test_client_may_override_only_whitelisted_parameters(self) -> None:
         from voicerag.api.stt_relay import _upstream_url

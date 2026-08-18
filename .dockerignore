@@ -19,8 +19,20 @@ __pycache__/
 # the 440 MB parquet plus a 55 MB rows cache.
 data/
 
-# Frontend: deployed separately (Vercel/Pages), not served by this API.
-web/
+# Frontend: built by the node stage in deploy/Dockerfile and served by the API
+# from the same origin, so the *sources* must reach the build context. What must
+# not is everything generated -- node_modules is ~400 MB, .next another ~200 MB,
+# and Docker uploads the whole context before the first instruction runs.
+#
+# public/ is excluded too, and deliberately: its six files (the VAD worklet, the
+# Silero ONNX weights, the onnxruntime WASM binaries -- 43 MB) are not in git,
+# they are produced by `npm run vad-assets` out of node_modules. Excluding them
+# keeps the context small and makes the image's copies provably come from the
+# pinned dependency rather than from whatever happens to be on a laptop.
+web/node_modules/
+web/.next/
+web/out/
+web/public/
 
 # Reports are evidence for the README, not runtime inputs.
 reports/

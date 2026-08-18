@@ -1,6 +1,6 @@
 """The HTTP surface: ``voicerag.api.main:app``.
 
-Seven endpoints, each with one job:
+Eleven endpoints, each with one job:
 
 ==================  ==========================================================
 ``POST /ask``       One question, one complete :class:`~voicerag.pipeline.RagResponse`.
@@ -8,6 +8,9 @@ Seven endpoints, each with one job:
                     one ``error``. The frontend parses exactly those names.
 ``POST /speculate`` Warm the retrieval cache from a partial transcript. Returns
                     202 immediately; the work happens after the response.
+``POST /speak``     Answer text to ``audio/wav``, so the answer is spoken and
+                    not merely printed.
+``GET  /examples``  Questions this corpus can actually answer.
 ``GET  /healthz``   Liveness, index state, provider circuit breakers.
 ``GET  /stats``     Corpus description and rolling latency percentiles.
 ``POST /stt/token`` A short-lived STT credential, so the account key never
@@ -15,10 +18,12 @@ Seven endpoints, each with one job:
 ``WS   /stt/stream``Relay for browser audio to Sarvam's realtime socket. This is
                     what keeps the account key server-side, because Sarvam mints
                     no ephemeral credential a browser could hold instead.
-``GET  /``          Endpoint index, so a judge who opens the port sees a map.
+``GET  /api``       Endpoint index, so a judge who opens the port sees a map.
+``GET  /``          The built frontend when ``STATIC_DIR`` names one, else the
+                    same endpoint index.
 ==================  ==========================================================
 
-Three cross-cutting rules:
+Four cross-cutting rules:
 
 **The index loads once, at startup, and every model is warmed before the first
 request.** A cold first request would put FAISS allocation and matrix paging
@@ -30,6 +35,11 @@ information leak and a client that must handle three error formats handles none.
 
 **Every request logs one structured JSON line including the trace breakdown**,
 so the HUD's numbers and the server's numbers are the same numbers.
+
+**Every endpoint that spends a third-party token is rate limited.** The deployed
+link is public and holds live credentials on a free tier; see
+:mod:`voicerag.api.ratelimit` for the policy and for why the middleware is
+installed before CORS rather than after.
 """
 
 from __future__ import annotations
@@ -41,17 +51,20 @@ import random
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, Request, WebSocket, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from ..config import Settings, get_settings
 from ..harness.resilience import Deadline
 from ..harness.trace import Trace
 from ..pipeline import PipelineNotReady, RagResponse
 from .logging import configure_logging, log_request
+from .ratelimit import RateLimiter, RateLimitMiddleware
 from .schemas import (
     AskRequest,
     ErrorResponse,
@@ -176,17 +189,103 @@ def create_app(
     application.state.app_state = app_state
     application.state.settings = cfg
 
+    limiter = RateLimiter(cfg)
+    application.state.rate_limiter = limiter
+
+    # Order is load-bearing, and it is the reverse of how it reads. Starlette's
+    # `add_middleware` inserts at position 0 and builds the stack by wrapping
+    # `reversed(user_middleware)`, so the middleware added *last* ends up
+    # outermost. The limiter is added first precisely so CORS ends up outside
+    # it: a 429 that reaches the browser without an `Access-Control-Allow-Origin`
+    # header is reported by `fetch` as an opaque network failure, and the
+    # frontend would say "the server is unreachable" for a condition it could
+    # have explained exactly.
+    application.add_middleware(RateLimitMiddleware, limiter=limiter)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=cfg.cors_origins,
         allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["content-type", "authorization"],
+        # Not safelisted, so a browser cannot read it unless it is exposed --
+        # and a Retry-After a client cannot read is a Retry-After that does not
+        # exist.
+        expose_headers=["Retry-After"],
     )
 
     _register_error_handlers(application)
-    _register_routes(application, app_state, cfg)
+    _register_routes(application, app_state, cfg, limiter)
+    _mount_frontend(application, cfg)
     return application
+
+
+def _frontend_dir(cfg: Settings) -> Path | None:
+    """The built frontend to serve at ``/``, or ``None``.
+
+    The single predicate for "is this deployment serving a UI". Both the route
+    registration and the mount consult it, because the two decisions have to
+    agree: registering ``GET /`` *and* mounting would leave the frontend
+    unreachable, and doing neither would leave the container answering 404 at its
+    own front door.
+
+    A directory that is configured but has no ``index.html`` counts as no
+    frontend. That is the honest reading of a build that did not produce one, and
+    it keeps the API serving rather than refusing to boot over an optional UI.
+    """
+    static_dir = cfg.static_dir
+    if static_dir is None:
+        return None
+    return static_dir if (static_dir / "index.html").is_file() else None
+
+
+def _mount_frontend(application: FastAPI, cfg: Settings) -> None:
+    """Serve the built frontend from this origin, when one is present.
+
+    Mounted **last**, and that is the whole trick: Starlette matches routes in
+    registration order, so every API route above has already claimed its path and
+    a ``Mount("/")`` only ever sees what is left. ``html=True`` is what makes the
+    mount answer ``/`` with ``index.html``.
+    """
+    static_dir = _frontend_dir(cfg)
+    if static_dir is None:
+        if cfg.static_dir is not None:
+            # Loud, and naming the path: the silent version of this is a
+            # container that passes its healthcheck and serves 404 to every
+            # visitor, which is a genuinely hard thing to diagnose from outside.
+            log.warning(
+                "STATIC_DIR is set but contains no index.html; serving the API only",
+                extra={"fields": {"static_dir": str(cfg.static_dir)}},
+            )
+        return
+
+    application.mount("/", _FrontendFiles(directory=static_dir, html=True), name="frontend")
+    log.info("serving frontend", extra={"fields": {"static_dir": str(static_dir)}})
+
+
+class _FrontendFiles(StaticFiles):
+    """``StaticFiles`` that declines a WebSocket instead of asserting on one.
+
+    ``Mount`` matches ``http`` **and** ``websocket`` scopes, while
+    ``StaticFiles.__call__`` opens with ``assert scope["type"] == "http"``. So
+    once a frontend is mounted at ``/``, an upgrade to any path the API does not
+    route -- ``ws://host/anything`` -- reaches the mount and raises
+    ``AssertionError``. Nothing catches it: ``ServerErrorMiddleware`` forwards
+    non-HTTP scopes untouched. The result is a bare 500 handshake and a full
+    traceback per attempt, on a public link, from one unauthenticated request.
+
+    Nothing in this application dials a socket anywhere but ``/stt/stream``, so
+    this is log hygiene rather than a live defect -- but a container whose logs a
+    judge may read should not be trivially fillable with tracebacks.
+    """
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] == "websocket":
+            # Decline before accepting, which is how ASGI says "no": the server
+            # answers the upgrade with an HTTP error rather than opening a socket.
+            await receive()
+            await send({"type": "websocket.close", "code": 1000})
+            return
+        await super().__call__(scope, receive, send)
 
 
 # --- error handling -----------------------------------------------------------
@@ -228,11 +327,12 @@ def _register_error_handlers(application: FastAPI) -> None:
 # --- routes -------------------------------------------------------------------
 
 
-def _register_routes(application: FastAPI, state: AppState, cfg: Settings) -> None:
+def _register_routes(
+    application: FastAPI, state: AppState, cfg: Settings, limiter: RateLimiter
+) -> None:
     """Attach every endpoint. Split out so ``create_app`` stays readable."""
 
-    @application.get("/", tags=["meta"])
-    async def index() -> dict[str, Any]:
+    def endpoint_map() -> dict[str, Any]:
         """A map of the API, for whoever opens the port without the frontend."""
         return {
             "service": cfg.app_name,
@@ -240,12 +340,35 @@ def _register_routes(application: FastAPI, state: AppState, cfg: Settings) -> No
                 "POST /ask": "question -> complete answer",
                 "POST /ask/stream": "question -> SSE token/final/error frames",
                 "POST /speculate": "partial transcript -> warm the retrieval cache",
+                "POST /speak": "answer text -> audio/wav",
+                "GET /examples": "questions this corpus can actually answer",
                 "GET /healthz": "liveness, index state, provider circuits",
                 "GET /stats": "corpus description and recent latency",
                 "POST /stt/token": "short-lived STT credential for the browser",
+                "WS /stt/stream": "browser audio -> Sarvam, transcripts back",
             },
             "budget_ms": cfg.budget_total_ms,
         }
+
+    @application.get("/api", tags=["meta"])
+    async def api_index() -> dict[str, Any]:
+        """The endpoint map, always at a fixed path.
+
+        ``/`` is the frontend when one is built into the image, so the map needs
+        somewhere it can be linked to unconditionally.
+        """
+        return endpoint_map()
+
+    # Only when nothing will be mounted at `/`. The predicate is shared with
+    # `_mount_frontend` rather than duplicated: registering this route and then
+    # declining to mount -- or the reverse -- is the kind of near-miss that
+    # produces a container serving 404 at its own front door.
+    if _frontend_dir(cfg) is None:
+
+        @application.get("/", tags=["meta"])
+        async def index() -> dict[str, Any]:
+            """A map of the API, for whoever opens the port without the frontend."""
+            return endpoint_map()
 
     @application.post("/ask", response_model=RagResponse, tags=["ask"])
     async def ask(payload: AskRequest) -> RagResponse:
@@ -410,6 +533,11 @@ def _register_routes(application: FastAPI, state: AppState, cfg: Settings) -> No
             }
         else:
             config = {**config, "config_source": "settings fallback (no index loaded)"}
+        # Counts and limits, never identities. Reported because "is the public
+        # link rate limited?" is a question a judge may reasonably ask, and
+        # pointing at a config file is a weaker answer than pointing at the
+        # running service.
+        config = {**config, "rate_limit": limiter.snapshot()}
         return HealthResponse(
             status="ok" if ready else "degraded",
             index_loaded=ready,
