@@ -5,16 +5,18 @@
 
 services:
   voicerag:
-    build:
-      # The Dockerfile expects the repo root: it copies src/, web/, scripts/ and
-      # requirements.txt, and .dockerignore is read relative to this context.
-      context: ../..
-      dockerfile: deploy/Dockerfile
-      args:
-        INDEX_ROWS: "20000"
-        INDEX_STRATEGY: recursive
-        EMBED_MODEL: minishlab/potion-base-8M
-    image: voicerag:local
+    # Pulled, not built. Building the index here costs 30-50 minutes on two slow
+    # ARM cores and has to be repeated on every host you try -- and with Ampere
+    # capacity being a lottery, "every host you try" is not hypothetical. The
+    # image is built once by .github/workflows/arm-image.yml on GitHub's free
+    # native ARM runner and pushed to GHCR, so this step is a download.
+    #
+    # Build locally instead with:
+    #   docker compose build --build-arg INDEX_ROWS=20000
+    # after restoring a `build:` block pointing at context ../.. and
+    # deploy/Dockerfile.
+    image: ${VOICERAG_IMAGE:-ghcr.io/samarthputhraya/voicerag:demo}
+    pull_policy: always
     restart: unless-stopped
     expose:
       - "8000"

@@ -70,6 +70,9 @@ runcmd:
   # --- source ---------------------------------------------------------------
   - mkdir -p /opt/voicerag
   - chown ubuntu:ubuntu /opt/voicerag
+  # Clones the DEFAULT branch. If the deploy assets are still on a feature
+  # branch, every VM you build will silently deploy stale code -- merge to
+  # main first, or add --branch <name> here.
   - sudo -u ubuntu git clone --depth 1 https://github.com/samarthputhraya/voicerag.git /opt/voicerag/repo
   - sudo -u ubuntu cp /opt/voicerag/repo/deploy/oracle/env.template /opt/voicerag/.env
   - chmod 600 /opt/voicerag/.env

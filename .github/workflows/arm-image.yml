@@ -95,3 +95,57 @@ jobs:
       - name: Logs on failure
         if: failure()
         run: docker logs vr || true
+
+  publish:
+    name: publish the real demo image to GHCR
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    # Only on demand, and only after the smoke build above has passed: this one
+    # embeds 197,511 passages and takes 25-50 minutes.
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The 440 MB shard, the 540 MB index and the layer cache together will
+      # fill a 14 GB runner and the failure looks like a compiler error.
+      - name: Reclaim disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Why this job exists, and it is the whole deployment strategy:
+      #
+      # Building the index on the target VM costs 30-50 minutes on two slow ARM
+      # cores, and it has to be repeated on every host you try. Oracle's Ampere
+      # capacity is a lottery and AWS's t4g trial is a separate account -- so the
+      # expensive, fragile step gets done ONCE here, on free hardware, with no
+      # card and no signup, and every host after that is `docker pull` plus
+      # about fifteen minutes. It also means a host that dies mid-judging can be
+      # replaced without rebuilding anything.
+      - name: Build and push the demo image
+        run: |
+          set -eux
+          IMAGE=$(echo "ghcr.io/${{ github.repository_owner }}/voicerag:demo" | tr 'A-Z' 'a-z')
+          docker build -f deploy/Dockerfile \
+            --build-arg INDEX_ROWS=20000 \
+            --build-arg INDEX_STRATEGY=recursive \
+            --build-arg EMBED_MODEL=minishlab/potion-base-8M \
+            -t "$IMAGE" .
+          docker push "$IMAGE"
+          {
+            echo "### Pushed \`$IMAGE\`"
+            echo ""
+            echo "**Now make the package public**, or every VM pull fails with \`denied\`:"
+            echo "GitHub profile -> Packages -> voicerag -> Package settings -> Change visibility -> Public."
+          } >> "$GITHUB_STEP_SUMMARY"

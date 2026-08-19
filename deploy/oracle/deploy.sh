@@ -87,8 +87,16 @@ say "iptables allows 80 and 443 (the cloud Security List is separate — check i
 
 # --- build -------------------------------------------------------------------
 cd "$COMPOSE_DIR"
-say "building (15-25 min on Ampere: it embeds 197,511 passages)"
-docker compose build
+say "pulling the prebuilt ARM image from GHCR (~600 MB, a few minutes)"
+if ! docker compose pull; then
+    die "pull failed. The most common cause is that the GHCR package is still
+  PRIVATE -- newly pushed packages default to private and the pull then fails
+  with 'denied'. Fix: GitHub profile -> Packages -> voicerag -> Package settings
+  -> Change visibility -> Public.
+
+  If the image has never been built, run the 'ARM64 image' workflow with
+  workflow_dispatch and wait for the publish job (25-50 min)."
+fi
 
 say "starting"
 docker compose up -d
