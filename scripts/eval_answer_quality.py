@@ -254,7 +254,12 @@ async def main() -> int:
             "kind": kind, "query": q, "gold": gold[:300],
             "outcome": "error" if err else ("refused" if abstained else "answered"),
             "answer": ans[:600], "token_f1": None if f1 is None else round(f1, 4),
-            "grounding": d.get("grounding_score"), "n_citations": len(cites),
+            # Nested under `guardrails`, not top level. Reading the top-level
+            # key silently yields None for every row, which reads as "grounding
+            # never ran" and is how a whole column of this report was blank.
+            "grounding": (d.get("guardrails") or {}).get("grounding_score"),
+            "grounded": (d.get("guardrails") or {}).get("grounded"),
+            "n_citations": len(cites),
             "cited_text": [(c.get("text") or "")[:300] for c in cites[:2]],
             "wall_ms": round(wall, 1), "error": err,
         })
