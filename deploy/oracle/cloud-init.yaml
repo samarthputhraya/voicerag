@@ -23,22 +23,47 @@ packages:
   - iptables-persistent
 
 write_files:
+  # NEVER put `owner: ubuntu:ubuntu` on an entry in this block. `write_files`
+  # runs very early in boot -- before cloud-init has created the default user on
+  # AWS images -- and an unknown owner fails the WHOLE block with
+  # `OSError: Unknown user or group: getpwnam(): name not found: 'ubuntu'`,
+  # silently taking every other file in it down too. Oracle's images happen to
+  # ship the user already, so this only bites on AWS, which is exactly the kind
+  # of difference that costs an evening. Write files as root here and fix
+  # ownership in `runcmd`, where the user is guaranteed to exist.
+
   # Oracle's Ubuntu images ship an INPUT chain that drops everything except SSH,
   # and it is separate from the cloud-side Security List. Opening the Security
   # List alone leaves Let's Encrypt unable to reach port 80, and the failure
   # looks like a Caddy bug: the certificate request simply times out. Both
   # layers have to be opened, and this is the one people miss.
+  #
+  # **Every command here is best-effort, and that is deliberate.** This is the
+  # only Oracle-specific step in an otherwise portable file, and AWS images need
+  # none of it -- their INPUT policy is already ACCEPT and `netfilter-persistent`
+  # may not exist. An earlier version ran `set -eu` and ended with a bare
+  # `netfilter-persistent save`, so on a non-Oracle image the script exited
+  # non-zero, **cloud-init abandoned every remaining runcmd step**, and the box
+  # came up with Docker installed and nothing deployed. From outside that is
+  # indistinguishable from a firewall problem: SSH answers, 80 and 443 refuse.
+  # A firewall convenience must never be able to abort the deployment.
   - path: /usr/local/sbin/voicerag-open-ports
     permissions: "0755"
     content: |
       #!/bin/sh
-      set -eu
+      # No `set -e`: see the comment above. Failure here is survivable.
+      command -v iptables >/dev/null 2>&1 || { echo "no iptables; nothing to open"; exit 0; }
       for port in 80 443; do
         if ! iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null; then
-          iptables -I INPUT 1 -p tcp --dport "$port" -j ACCEPT
+          iptables -I INPUT 1 -p tcp --dport "$port" -j ACCEPT || true
         fi
       done
-      netfilter-persistent save
+      if command -v netfilter-persistent >/dev/null 2>&1; then
+        netfilter-persistent save || true
+      else
+        echo "netfilter-persistent absent (normal on AWS); rules are live but not persisted"
+      fi
+      exit 0
 
 runcmd:
   # --- docker ---------------------------------------------------------------

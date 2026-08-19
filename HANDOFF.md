@@ -33,7 +33,7 @@ slow/flaky network, **no Docker**, portable Node at
 | 5 | Runs inside a real harness — retries, structured I/O, error recovery | **Done.** Error taxonomy, jittered retries, circuit breakers, Groq→OpenAI fallback. |
 | 6 | Guardrails that know when *not* to answer | **Done.** Input guard + abstention gate + grounding, all three verified refusing for different reasons. |
 | — | Public GitHub repo | **Done.** |
-| — | **Live working link** | **Code-ready, not pushed.** Every blocker is cleared; what remains needs your Hugging Face token. See §6. |
+| — | **Live working link** | **DONE.** <https://voicerag-demo.duckdns.org> — AWS `t4g.small`, Mumbai, free to 31 Dec 2026. Verified live: valid TLS, `wss` relay accepted, grounding 1.0, 486 ms. See §6. |
 | — | **2 videos** | **NOT DONE.** |
 
 **547 tests pass, 1 skipped.** Frontend typecheck clean; the static export builds
@@ -723,140 +723,63 @@ behaviour. Re-investigating them is wasted time you do not have.
 
 ## 6. WHAT IS LEFT — in priority order
 
-### 7.1 The live link — all three blockers are cleared; the push is yours
+### 7.1 The live link — DONE
 
-The three blockers this file used to list are fixed and verified. Taking them in
-the order they were written:
+**<https://voicerag-demo.duckdns.org>**
 
-1. **`CORS_ORIGINS` unset in the image.** Fixed at the root rather than by
-   guessing a hostname: a Space's origin does not exist at build time, so it
-   could never have been baked in. `stt_relay._origin_allowed()` now **always
-   allows a same-origin upgrade**, comparing the `Origin` header's authority
-   against `X-Forwarded-Host` (falling back to `Host`). A third-party origin is
-   still refused — there are tests for both, including one asserting that
-   `https://demo.example.evil.com` does not match `demo.example`. The image
-   therefore sets no `CORS_ORIGINS` at all, and the failure mode this section
-   used to warn about cannot occur in the same-origin deployment.
-2. **No rate limiter.** `src/voicerag/api/ratelimit.py`, wired into
-   `create_app`. Pure-ASGI middleware, no new dependency, in-process counters
-   (the container runs `--workers 1`, so they are exact rather than
-   approximate). Two layers, and the difference is stated rather than implied:
-   per-client limits key on `X-Forwarded-For`, which the client writes, so they
-   are **advisory**; the **global** limits count requests rather than
-   identities and are what actually protect the quota. Covers `/ask`,
-   `/ask/stream`, `/speak`, `/speculate`, `/examples`, `/stats`, `/stt/token`
-   and `WS /stt/stream` — including a concurrency cap on the relay, because a
-   rate limit alone cannot stop ten sockets opened in one second from holding
-   ten upstream Sarvam sessions for the full 120 s. `/healthz` is exempt, so
-   the limiter can never starve the container's own HEALTHCHECK.
-3. **The frontend not in the image.** `deploy/Dockerfile` now has a node stage
-   that static-exports the Next app; the API serves it at `/` via `STATIC_DIR`
-   and the endpoint map moved to `/api`. `.dockerignore` no longer excludes
-   `web/`, and `push_space.ps1` stages the frontend sources.
+AWS EC2 `t4g.small` (ARM, 2 GB) in `ap-south-1` Mumbai, free for 750 hours a
+month until **31 Dec 2026**. Caddy terminates TLS for a DuckDNS hostname; the app
+is the prebuilt `ghcr.io/samarthputhraya/voicerag:demo` image, built by
+`.github/workflows/arm-image.yml` on a free native ARM runner. Both containers
+are `restart=unless-stopped` and Docker is enabled at boot, so it survives a
+reboot. Runbook: [`deploy/aws/README.md`](deploy/aws/README.md).
 
-**Verified, not assumed.** The static export was built (`out/` = 44 MB, both
-routes prerendered, every VAD asset present, and **no `localhost:8000` anywhere
-in the bundle**). The real API was then started against it with the real 197,511
-chunk index, and:
+Verified over the public URL, not locally: `/` 200, certificate valid
+(`ssl_verify_result: 0`), VAD assets 200, `wss://…/stt/stream` **accepted** from
+the page's own origin and **refused** from a hostile one, "What is bayern
+munich?" answered at grounding 1.0 in 486 ms, and the pipe-bomb probe refused at
+the input guard in **0 ms with 0 citations**.
 
-| Check | Result |
-|---|---|
-| `GET /` | 200, `<title>VoiceRAG — grounded answers from speech</title>` |
-| `GET /api` | 200, 9 endpoints |
-| `/vad.worklet.bundle.min.js`, `/_next/static/chunks/*.js` | 200 |
-| `POST /ask` "Can gabapentin treat neuropathy?" | groq, grounded **0.9583**, 2 citations, 985 ms |
-| Rate limit tripped | **429** + `Retry-After: 57` + the standard error body |
-| The 429's CORS headers | `access-control-allow-origin` **and** `access-control-expose-headers: Retry-After` |
-| `/healthz` while `/stats` was limited | 200, 200, 200 |
+**Measured headroom on the box:** the app holds 951 MB of 1,836 MB, leaving
+~456 MB plus 4 GB of swap. Fine for a demo, thin under a dozen simultaneous
+judges. The likelier visible failure is Groq's 8k tok/min free tier rather than
+the host; `OPENAI_API_KEY` is wired and tested as the fallback and remains unset.
 
-That CORS-on-429 row is the one worth understanding. Starlette's
-`add_middleware` inserts at position 0 and builds the stack over
-`reversed(user_middleware)`, so **the last middleware added is outermost**. The
-limiter is therefore added *before* the CORS call, so CORS stays outside it.
-Get it backwards and a 429 reaches the browser with no
-`Access-Control-Allow-Origin`, `fetch` reports an opaque network error, and the
-UI says "the server is unreachable" for a condition the server had just
-explained precisely.
+**Two dates.** The `t4g.small` free trial ends **31 Dec 2026**, after which the
+instance costs ~$12/month; the 12-month free tier for EBS and the public IPv4
+ends about a year after signup. Set a $1 budget alert. An Elastic IP is
+attached, so the address survives a stop/start — release it if the instance is
+ever terminated, or it bills while idle.
 
-**What is left is the push — and it needs a decision before it needs a token.**
+**Why not Oracle**, which is the better machine (12 GB, free permanently):
+signup runs a strict card-validity check that rejects many Indian debit cards
+with a generic "an error occurred", and retrying does not help. `deploy/oracle/`
+stays, because everything in it except the runbook is provider-neutral and the
+AWS path reuses it verbatim.
 
-> **A Docker Space is no longer free to create.** Verified against the Hub docs
-> this session: *"Static Spaces are free for everyone. Gradio and Docker Spaces
-> run on compute and require a paid plan to create: PRO for personal accounts,
-> Team or Enterprise for organizations."* The **hardware** is still free — CPU
-> Basic is 2 vCPU / 16 GB at $0/hour — it is the **creation** of a Gradio or
-> Docker Space that now requires PRO ($9/month) on a personal account. Earlier
-> versions of this file and of the deploy READMEs called the Space "free", which
-> was true of the running cost and false of the prerequisite.
+### 7.1b Three defects the deploy exposed, now fixed
 
-Options, in the order they are worth considering with three days left:
+All three were invisible from outside: SSH answered while 80 and 443 refused,
+which reads as a firewall problem and is not one.
 
-1. **HF PRO, $9 for one month.** Everything in the repo already targets this and
-   nothing needs to change. Least risk, and less than the cost of not shipping
-   the deliverable.
-2. **Render `standard`.** `deploy/render.yaml` is now correct and would serve
-   the same single-origin image (it had been carrying `BUDGET_TOTAL_MS=2500`
-   with no `MAX_TOKENS`, which overrides the image's ENV and reintroduces the
-   truncated-mid-sentence answers that `6450768` fixed — corrected this
-   session). 2 GB against ~740 MB resident is comfortable. Costs more than (1).
-3. **Oracle Cloud Always Free — built, and the chosen path.** Genuinely $0, and
-   unlike a Space it never sleeps. `deploy/oracle/` has cloud-init, a compose
-   file, a Caddyfile, an env template and a `deploy.sh` that prints the live URL.
-   Read `deploy/oracle/README.md` before starting; the two things that actually
-   go wrong are flagged there.
+1. **`owner: ubuntu:ubuntu` in `write_files` fails the whole block.**
+   `write_files` runs before cloud-init creates the default user on AWS images,
+   so it raises `OSError: Unknown user or group: getpwnam()` — and every other
+   file in the block dies with it, including the `.env` holding the API keys.
+   `runcmd` still runs, which is why Docker and the repo were present and
+   nothing was deployed. Oracle's images ship the user already, so this only
+   bites on AWS. Set ownership in `runcmd`; there is now a warning at the top of
+   the block.
+2. **A firewall convenience could abort the deployment.** The Oracle-specific
+   `voicerag-open-ports` ran under `set -eu` and ended with a bare
+   `netfilter-persistent save`. On an image without that binary it exited
+   non-zero and cloud-init skipped every remaining step. Now best-effort
+   throughout — a nicety must never be able to kill the deploy.
+3. **`deploy.sh` was committed mode `644`**, so running it by path failed with
+   permission denied. Fixed with `git update-index --chmod=+x`.
 
-   **HTTPS is mandatory, and it is the reason this path is more work than a
-   PaaS.** `getUserMedia` only works in a secure context, so a bare Oracle IP
-   over HTTP gives a dead microphone — the one thing the demo is about. Caddy
-   obtains a Let's Encrypt certificate on its own, and `<ip>.sslip.io` resolves
-   to the IP it names, so there is a real hostname to certify without buying a
-   domain.
-
-   ARM viability was checked rather than assumed. Every pinned requirement
-   publishes a Linux `aarch64` wheel; `faiss-cpu 1.15.0` matters most because it
-   ships **no sdist**, so a missing wheel would have been fatal rather than slow
-   — it has `manylinux_2_28_aarch64`, and Debian Bookworm's glibc 2.36 satisfies
-   it. `package-lock.json` carries `@next/swc-linux-arm64-gnu`, so `npm ci`
-   resolves the right SWC binary on ARM. `pyarrow` (pulled in only for the
-   index build) has aarch64 wheels too, so Arrow is never compiled from source.
-
-   What could not be checked here: this machine has no Docker, so the image has
-   never been built. `.github/workflows/arm-image.yml` closes that on a free
-   native ARM runner — it builds with a 200-row index, boots the container,
-   and asserts that `/` is the UI, `/api` is the map, a VAD asset is served, and
-   rate limiting is on. Run it before creating the VM.
-
-4. **Other free hosts** — Fly.io killed its free tier; Koyeb and Render free are
-   512 MB and OOM on a 740 MB index; Cloud Run scales to zero, so a judge's
-   first request pays a ~20 s index load. Do not start here three days out.
-
-Once a Space exists:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File deploy\huggingface\push_space.ps1 -User <hf-user>
-```
-
-Then set `SARVAM_API_KEY`, `GROQ_API_KEY` and (please) `OPENAI_API_KEY` under
-the Space's Settings → Variables and secrets. `-IndexRows` already defaults to
-20000, matching the shipped index.
-
-The script no longer lies about the outcome. It used to print a green "Pushed."
-and exit 0 even when `git push` failed — `$ErrorActionPreference = "Stop"` does
-not govern native exit codes in Windows PowerShell 5.1 — and its `finally` had
-already deleted the commit, so the whole thing had to be rerun. It now checks
-`$LASTEXITCODE` after every git call, names the likely cause, keeps the staged
-commit for a retry, and exits 1. Reproduced both behaviours before and after.
-
-**Two things to watch on the first build**, neither verified because neither can
-be without pushing:
-
-- **Build time.** The index build is 6–10 min and the node stage adds roughly
-  2–4 more. Comfortable against HF's build timeout, but it is the first thing to
-  check if the build is killed.
-- **`next/font/google`.** `app/layout.tsx` fetches Imbue and Victor Mono at
-  build time. It worked here, but the build machine needs network for it; a
-  fetch failure there fails the whole image. If that bites, the fix is a local
-  fallback stack in `layout.tsx`, not a retry.
+**First command on a box that came up half-built:** `cloud-init status --long`.
+It names the failing module immediately and would have saved an hour here.
 
 ### 7.2 Two videos (required deliverable, do not exist)
 

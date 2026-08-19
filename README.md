@@ -4,7 +4,18 @@
 
 Submission for **HH Goa 2026 — Shortlisting Task 2: Voice-Enabled RAG System**.
 
-> Repo: <https://github.com/samarthputhraya/voicerag> · Live demo: `<URL>` · Demo video: `<URL>` · Process video: `<URL>`
+## ▶ Try it: **<https://voicerag-demo.duckdns.org>**
+
+Click the microphone and ask out loud. Or type. Six chips below the box are
+questions this corpus is *verified* to answer — each was run end to end against
+this exact index and kept only if it produced a grounded, cited answer.
+
+Then ask it **"what is the capital of India"** and watch it decline. That is the
+system working: the corpus is a fixed ~196k-passage slice of MS MARCO, it does
+not contain that fact, and refusing beats inventing one.
+
+> Repo: <https://github.com/samarthputhraya/voicerag> · Live demo:
+> <https://voicerag-demo.duckdns.org> · Demo video: `<URL>` · Process video: `<URL>`
 
 ---
 
