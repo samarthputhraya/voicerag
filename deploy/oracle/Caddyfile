@@ -5,10 +5,13 @@
 # at all and the browser explains itself only in the console -- so a bare
 # Oracle instance without this file is a voice demo with no voice.
 #
-# `{$SITE_ADDRESS}` is set by deploy.sh: either a domain you own, or
-# `<public-ip>.sslip.io`, which resolves to the IP it names and is therefore a
-# real hostname Let's Encrypt will issue for. Caddy obtains and renews the
-# certificate on its own; there is no certbot step and no cron entry.
+# `{$SITE_ADDRESS}` comes from /opt/voicerag/.env: a duckdns.org subdomain
+# (free, no card) or a domain you own. Caddy obtains and renews the certificate
+# on its own; there is no certbot step and no cron entry.
+#
+# Not sslip.io: Let's Encrypt rate-limits per registrable domain and sslip.io's
+# shared quota has been exhausted since ~Feb 2026, so the request fails and the
+# site simply never comes up.
 
 {$SITE_ADDRESS} {
 	encode zstd gzip

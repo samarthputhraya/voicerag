@@ -1,6 +1,6 @@
 # VoiceRAG on Oracle Cloud "Always Free"
 
-The genuinely-$0 deployment: a 4 OCPU / 24 GB Ampere A1 instance, Docker, and
+The genuinely-$0 deployment: a 1 OCPU / 6 GB Ampere A1 instance, Docker, and
 Caddy for automatic HTTPS. One origin, one container for the app, no monthly
 bill and no sleep-on-idle.
 
@@ -20,11 +20,41 @@ Managed hosts hand you TLS for free. A raw VM does not, which is the real reason
 this path is more work than a Space. Caddy closes the gap: it obtains and renews
 a Let's Encrypt certificate by itself, given a *hostname*.
 
-And you get a hostname without buying a domain: **`<your-ip>.sslip.io`** resolves
-to the IP it names. `deploy.sh` derives it automatically. If you own a domain,
-point an A record at the instance and set `SITE_ADDRESS` instead.
+You need a hostname, and you can get one free in two minutes at
+**[duckdns.org](https://www.duckdns.org)** — sign in with GitHub, create a
+subdomain, point it at the instance's public IP, and set `SITE_ADDRESS`.
+
+**Not `sslip.io` or `nip.io`.** They look perfect — `<ip>.sslip.io` resolves to
+the IP it names, with no signup at all — and an earlier version of this guide
+recommended exactly that. But Let's Encrypt rate-limits *per registrable
+domain*, sslip.io is one registrable domain shared by the whole internet, and
+its quota has been exhausted since roughly Feb 2026. The failure is silent:
+Caddy retries, the certificate never arrives, and it presents as a firewall
+problem. duckdns.org is on the Public Suffix List, so each subdomain gets its
+own bucket.
 
 ---
+
+## ⚠️ Oracle changed the Always Free tier under us — read this first
+
+**The Ampere A1 Always Free allowance was halved to 2 OCPU / 12 GB on 15 June
+2026**, with no announcement, and Oracle began **terminating over-limit
+instances on 18 August 2026**. Oracle's own docs now state the entitlement as
+"1,500 OCPU hours and 9,000 GB hours per month... equivalent to 2 OCPUs and 12
+GB of memory". Earlier versions of this guide told you to provision 4 OCPU /
+24 GB, which is now over the cap. InfoQ also flags the trap that follows: *"If
+an existing resource is terminated, it may not be possible to recreate
+resources above the updated Always Free limit."*
+
+**Ask for 1 OCPU / 6 GB.** That is comfortably inside the cap, it is ~6x what
+this service needs (measured: 931 MB resident), and smaller requests are filled
+far more often when capacity is tight.
+
+**And Oracle reclaims idle Always Free compute.** The documented trigger is a
+7-day window where 95th-percentile CPU, network *and* memory are all under 20%.
+This is a real risk for a demo that sits quiet between judging sessions — and it
+is a second reason not to over-provision: 931 MB on a 12 GB shape is ~8% memory
+and looks idle, while on a 6 GB shape it is ~16% and looks far less so.
 
 ## ⚠️ The two things that actually go wrong
 
@@ -64,7 +94,7 @@ must open the Security List yourself** (step 3 below).
 | Field | Value |
 |---|---|
 | Image | **Canonical Ubuntu 24.04** (`aarch64` build) |
-| Shape | **VM.Standard.A1.Flex**, 4 OCPU / 24 GB (drop to 1/6 if capacity is refused) |
+| Shape | **VM.Standard.A1.Flex**, **1 OCPU / 6 GB** — see the warning below; do NOT ask for 4/24 |
 | Networking | Assign a **public IPv4 address** |
 | SSH keys | Upload your public key, or let Oracle generate one and **save the private key** |
 
@@ -110,7 +140,7 @@ Fill in `SARVAM_API_KEY` and `GROQ_API_KEY` at minimum, and `OPENAI_API_KEY` if
 you have one — Groq's free tier is ~8,000 tokens/min, roughly four or five
 answers, after which the demo says "Every generation provider failed".
 
-Leave `SITE_ADDRESS` blank to get `<ip>.sslip.io` automatically.
+`SITE_ADDRESS` is **required** — set it to your duckdns subdomain. `deploy.sh` refuses to run without it rather than guessing.
 
 ### 5. Deploy
 
@@ -172,7 +202,7 @@ docker compose ps
 
 ## What this costs
 
-Nothing, within Always Free: the A1 allowance is 4 OCPU and 24 GB of memory
+Nothing, within Always Free: the A1 allowance is **2 OCPU and 12 GB** of memory
 across all your ARM instances, plus 200 GB of block volume and 10 TB/month of
 egress. This deployment uses one instance and the boot volume.
 

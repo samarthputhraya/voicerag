@@ -25,15 +25,36 @@ die()  { printf '\n\033[1;31mxx  %s\033[0m\n' "$*" >&2; exit 1; }
 set -a; . "$ENV_FILE"; set +a
 
 # --- hostname ----------------------------------------------------------------
-# Caddy needs a name, not an address: Let's Encrypt does not issue for bare IPs.
-# sslip.io resolves <ip>.sslip.io to <ip>, which makes a real hostname out of an
-# instance that has none, with no domain to buy and no DNS to configure.
+# Caddy needs a NAME, not an address: Let's Encrypt does not issue for bare IPs,
+# and without a certificate there is no secure context, and without a secure
+# context `getUserMedia` does not exist and the microphone is dead. So this is
+# not a nicety -- it is the demo.
+#
+# This used to derive <public-ip>.sslip.io automatically. **Do not go back to
+# that.** sslip.io is a single registrable domain as far as Let's Encrypt's
+# rate limiter is concerned, it is used by the whole internet, and its
+# certificates-per-domain quota has been exhausted since roughly Feb 2026 --
+# every request now fails with "too many certificates already issued". The
+# failure is silent from here: Caddy retries, the site never comes up, and it
+# looks like a firewall problem.
+#
+# duckdns.org is on the Public Suffix List, so each subdomain gets its own rate
+# limit bucket rather than sharing one. Free, no card, sign in with GitHub.
 if [ -z "${SITE_ADDRESS:-}" ]; then
-    say "SITE_ADDRESS is blank; deriving one from the public IP"
-    PUBLIC_IP="$(curl -fsS --max-time 10 https://api.ipify.org || true)"
-    [ -n "$PUBLIC_IP" ] || die "could not determine the public IP; set SITE_ADDRESS in $ENV_FILE"
-    SITE_ADDRESS="${PUBLIC_IP}.sslip.io"
-    export SITE_ADDRESS
+    PUBLIC_IP="$(curl -fsS --max-time 10 https://api.ipify.org || echo '<this-ip>')"
+    die "SITE_ADDRESS is empty in $ENV_FILE, and there is no safe way to guess it.
+
+  Get a free hostname (2 minutes, no card):
+    1. https://www.duckdns.org  -> sign in with GitHub
+    2. create a subdomain, e.g.  voicerag-demo
+    3. set its IP to  ${PUBLIC_IP}
+    4. put this in $ENV_FILE:
+         SITE_ADDRESS=voicerag-demo.duckdns.org
+
+  Or use any domain you own, with an A record pointing at ${PUBLIC_IP}.
+
+  Not sslip.io or nip.io: their shared Let's Encrypt quota is exhausted and the
+  certificate request will fail."
 fi
 say "serving at https://${SITE_ADDRESS}"
 
