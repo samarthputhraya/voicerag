@@ -34,8 +34,13 @@ web/.next/
 web/out/
 web/public/
 
-# Reports are evidence for the README, not runtime inputs.
-reports/
+# Reports are evidence for the README, not runtime inputs -- with one exception.
+# examples.json IS a runtime input: GET /examples serves it, and without it in
+# the image the deployed demo silently falls back to sampling the shard's own
+# labels, which is exactly the behaviour that puts a question on screen the
+# model then declines.
+reports/*
+!reports/examples.json
 plan.md
 
 # Docs and tooling that do not affect the running service.

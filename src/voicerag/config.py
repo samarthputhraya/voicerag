@@ -240,8 +240,26 @@ class Settings(BaseSettings):
         default=None,
         description="JSON written by GuardrailPolicy.save(), typically a calibrated gate.",
     )
+    examples_file: Path = Field(
+        default=REPO_ROOT / "reports" / "examples.json",
+        description=(
+            "Questions verified to answer against the served index, written by "
+            "scripts/verify_examples.py and offered by GET /examples. The "
+            "shard's own answerable labels are a claim about the dataset, not "
+            "about this pipeline, and the two disagree -- so a chip sampled "
+            "from them can be one the model then declines, which is the most "
+            "avoidable way to look broken on camera. When this file is absent "
+            "or was generated against a different index, /examples falls back "
+            "to sampling rather than failing."
+        ),
+    )
     grounding_claim_threshold: float = Field(default=0.55, ge=0.0, le=1.0)
     grounding_answer_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Distinct content tokens a claim needs before lexical overlap may support
+    # it. At 1, coverage is a presence test: "Mumbai." scored 1.0 against
+    # passages that never say Mumbai is the capital, and the fabrication was
+    # served as fully grounded. See GroundingConfig.min_claim_tokens.
+    grounding_min_claim_tokens: int = Field(default=2, ge=1, le=10)
     answer_on_ungrounded: bool = Field(
         default=False,
         description=(
@@ -375,7 +393,7 @@ class Settings(BaseSettings):
             return [item.strip() for item in stripped.split(",") if item.strip()]
         return value
 
-    @field_validator("index_dir", "guardrail_policy_file", "static_dir")
+    @field_validator("index_dir", "guardrail_policy_file", "static_dir", "examples_file")
     @classmethod
     def _absolutise(cls, value: Path | None) -> Path | None:
         """Resolve relative paths against the repo root, not the CWD.

@@ -1,0 +1,146 @@
+{
+  "generated_from": {
+    "index_dir": "C:\\Users\\samar\\OneDrive\\Documents\\voicerag\\data\\index_20k",
+    "n_chunks": 197511,
+    "embedder_spec": "static:minishlab/potion-base-8M",
+    "strategy": "recursive"
+  },
+  "verified": [
+    "How long for cantaloupe to mature?",
+    "Do indians eat rice?",
+    "How much is it per day when locked up in county jail?",
+    "What is bayern munich?",
+    "What is a corporation?",
+    "How to print an excel sheet?",
+    "How long does it take cracked ribs to heal?",
+    "How do i pit cherries?",
+    "How effective are sassy water?",
+    "What is basal in dna?"
+  ],
+  "rejected": [
+    {
+      "question": "How fast does an eagle travel?",
+      "reason": "The indexed passages have nothing on “fast eagle travel”, so I'd be guessing: only 0% of the top passages were found by both retrievers; the best passage only reaches 0.56 similarity against a 0.62 fl"
+    },
+    {
+      "question": "What is barter system and its problems?",
+      "reason": "I drafted an answer but 1 statement(s) weren't supported by the retrieved passages, so I won't state them. The first was “Its problems include the need for a double coincidence of wants, lack of a com"
+    },
+    {
+      "question": "How long should you carb cycle?",
+      "reason": "The indexed passages have nothing on “long carb cycle”, so I'd be guessing: the best passage only reaches 0.54 similarity against a 0.62 floor; only 20% of the top passages were found by both retrieve"
+    },
+    {
+      "question": "How long is shoulder recovery?",
+      "reason": "The model read the retrieved passages and judged them insufficient, so it declined to answer rather than guess."
+    },
+    {
+      "question": "How far is philadelphia from lancaster pa?",
+      "reason": "The model read the retrieved passages and judged them insufficient, so it declined to answer rather than guess."
+    },
+    {
+      "question": "How much supervisor pay rate for cvs warehouse?",
+      "reason": "The model read the retrieved passages and judged them insufficient, so it declined to answer rather than guess."
+    },
+    {
+      "question": "What is battery life f?",
+      "reason": "The model read the retrieved passages and judged them insufficient, so it declined to answer rather than guess."
+    },
+    {
+      "question": "What is bay crest partners?",
+      "reason": "The indexed passages have nothing on “bay crest partners”, so I'd be guessing: the best passage only reaches 0.43 similarity against a 0.62 floor; only 20% of the top passages were found by both retri"
+    }
+  ],
+  "detail": [
+    {
+      "question": "How long for cantaloupe to mature?",
+      "answered": true,
+      "answer": "Cantaloupes take about 35 to 45 days to ripen after pollination. [2]",
+      "grounding": 1.0,
+      "abstain_confidence": 0.1047,
+      "n_citations": 1,
+      "provider": "groq"
+    },
+    {
+      "question": "Do indians eat rice?",
+      "answered": true,
+      "answer": "Yes, Indians eat rice [1][4].",
+      "grounding": 1.0,
+      "abstain_confidence": 0.2901,
+      "n_citations": 2,
+      "provider": "groq"
+    },
+    {
+      "question": "How much is it per day when locked up in county jail?",
+      "answered": true,
+      "answer": "$28.00 per day, which covers room, board, and routine medical care. [5]",
+      "grounding": 1.0,
+      "abstain_confidence": 0.1911,
+      "n_citations": 1,
+      "provider": "groq"
+    },
+    {
+      "question": "What is bayern munich?",
+      "answered": true,
+      "answer": "Bayern Munich is a German sports club based in Munich, Bavaria, best known for its football team that plays in the Bundesliga and is the most successful club in German football history. [3]",
+      "grounding": 1.0,
+      "abstain_confidence": 0.3058,
+      "n_citations": 1,
+      "provider": "groq"
+    },
+    {
+      "question": "What is a corporation?",
+      "answered": true,
+      "answer": "A corporation is a legal entity that separates the business from its owners, having shareholders, directors, and officers, and can be a C‑corp or an S‑corp. [1][4]",
+      "grounding": 0.9038,
+      "abstain_confidence": 0.0558,
+      "n_citations": 2,
+      "provider": "groq"
+    },
+    {
+      "question": "How to print an excel sheet?",
+      "answered": true,
+      "answer": "Print an Excel sheet by clicking File → Print, preview with Next/Previous, then click the big Print button. [3]",
+      "grounding": 0.8865,
+      "abstain_confidence": 0.1287,
+      "n_citations": 1,
+      "provider": "groq"
+    },
+    {
+      "question": "How long does it take cracked ribs to heal?",
+      "answered": true,
+      "answer": "It usually takes between 3 to 4 months for cracked ribs to heal. [2]",
+      "grounding": 0.875,
+      "abstain_confidence": 0.1584,
+      "n_citations": 1,
+      "provider": "groq"
+    },
+    {
+      "question": "How do i pit cherries?",
+      "answered": true,
+      "answer": "Use the twist or poke method: twist the cherry to loosen the pit or push a straw around the stem to remove it [1][5].",
+      "grounding": 0.8606,
+      "abstain_confidence": 0.1831,
+      "n_citations": 2,
+      "provider": "groq"
+    },
+    {
+      "question": "How effective are sassy water?",
+      "answered": true,
+      "answer": "Sassy water is said to flatten the tummy, relieve bloating, and cause significant body changes by eliminating carbs, red meat, sugars, and caffeine [1][3][4].",
+      "grounding": 0.8382,
+      "abstain_confidence": 0.2204,
+      "n_citations": 3,
+      "provider": "groq"
+    },
+    {
+      "question": "What is basal in dna?",
+      "answered": true,
+      "answer": "Basal refers to the transcription apparatus that directly binds to cis‑acting DNA sequences and initiates transcription [2].",
+      "grounding": 0.8277,
+      "abstain_confidence": 0.4172,
+      "n_citations": 1,
+      "provider": "groq"
+    }
+  ]
+}

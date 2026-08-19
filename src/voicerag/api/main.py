@@ -45,6 +45,7 @@ installed before CORS rather than after.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import random
@@ -59,7 +60,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from ..config import Settings, get_settings
+from ..config import REPO_ROOT, Settings, get_settings
 from ..harness.resilience import Deadline
 from ..harness.trace import Trace
 from ..pipeline import PipelineNotReady, RagResponse
@@ -217,6 +218,60 @@ def create_app(
     _register_routes(application, app_state, cfg, limiter)
     _mount_frontend(application, cfg)
     return application
+
+
+def _unanswerable_example(state: AppState) -> str | None:
+    """One question the shard labels unanswerable, for demonstrating a refusal."""
+    if state.bundle is None:
+        return None
+    for raw in state.bundle.manifest.get("example_unanswerable", []):
+        question = _presentable_question(raw)
+        if question:
+            return question
+    return None
+
+
+@functools.lru_cache(maxsize=1)
+def _verified_examples_file(path: str) -> tuple[str, ...]:
+    """Read and cache the verified question list.
+
+    Cached because ``/examples`` is called on every page load and this is a file
+    read on a path a judge will hit; the file is written offline by
+    ``scripts/verify_examples.py`` and never changes while the process runs.
+    """
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ()
+    questions = payload.get("verified")
+    if not isinstance(questions, list):
+        return ()
+    return tuple(q for q in questions if isinstance(q, str) and q.strip())
+
+
+def _verified_examples(state: AppState, cfg: Settings) -> list[str]:
+    """Questions measured to answer against *this* index, or an empty list.
+
+    Guarded on chunk count as well as existence: an artifact generated against a
+    different index describes questions this one may refuse, and serving those
+    would recreate the exact defect the file exists to remove. A mismatch is
+    silent by design -- it falls back to sampling rather than failing a request.
+    """
+    path = cfg.examples_file
+    if not path.is_file():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    built_for = (payload.get("generated_from") or {}).get("n_chunks")
+    if state.pipeline is not None and built_for not in (None, state.pipeline.n_chunks):
+        log.warning(
+            "reports/examples.json was generated against a different index; sampling instead",
+            extra={"fields": {"file_n_chunks": built_for, "index_n_chunks": state.pipeline.n_chunks}},
+        )
+        return []
+    return list(_verified_examples_file(str(path)))
 
 
 def _frontend_dir(cfg: Settings) -> Path | None:
@@ -589,7 +644,30 @@ def _register_routes(
         The manifest carries the shard's own labelled queries, so the honest fix
         is to show a few. Sampled deterministically from the answerable set, so
         the presets are stable across reloads and a demo can be rehearsed.
+
+        **But the shard's label is a claim about the dataset, not about this
+        pipeline, and the two disagree.** "How is caffeine metabolized?" is
+        labelled answerable, retrieves cleanly, and is then declined -- its gold
+        answer in MS MARCO is about "fat burning supplements", not the
+        biochemistry the question asks. Offering it puts a question on screen
+        that the system refuses, which is the most avoidable way to look broken.
+        No cheap signal predicts this: the abstention gate passes every chip in
+        the sampled set, so only a real generation call tells the truth.
+
+        So `reports/examples.json`, written by `scripts/verify_examples.py`,
+        wins when it exists: those questions were run end to end against this
+        index and answered. Sampling remains the fallback, because a deployment
+        that has not run the script should still show something.
         """
+        verified = _verified_examples(state, cfg)
+        if verified:
+            return {
+                "examples": verified[:n],
+                "unanswerable_example": _unanswerable_example(state),
+                "n_indexed": 0 if state.pipeline is None else state.pipeline.n_chunks,
+                "source": "verified",
+            }
+
         pool: list[str] = []
         if state.bundle is not None:
             for raw in state.bundle.manifest.get("example_queries", []):
@@ -597,24 +675,26 @@ def _register_routes(
                 if q:
                     pool.append(q)
         if not pool:
-            return {"examples": [], "unanswerable_example": None, "n_indexed": 0}
+            # `source` is present on every path: a client that wants to know
+            # whether the chips it is rendering were verified should never have
+            # to distinguish "sampled" from "the key is missing".
+            return {
+                "examples": [],
+                "unanswerable_example": None,
+                "n_indexed": 0,
+                "source": "sampled",
+            }
 
         rng = random.Random(seed)
         picked = rng.sample(pool, min(n, len(pool)))
-
-        unanswerable = None
-        if state.bundle is not None:
-            for raw in state.bundle.manifest.get("example_unanswerable", []):
-                unanswerable = _presentable_question(raw)
-                if unanswerable:
-                    break
 
         return {
             "examples": picked,
             # Offered separately and labelled: showing the system decline is
             # half of requirement 6, and it should not happen by accident.
-            "unanswerable_example": unanswerable,
+            "unanswerable_example": _unanswerable_example(state),
             "n_indexed": 0 if state.pipeline is None else state.pipeline.n_chunks,
+            "source": "sampled",
         }
 
     @application.post("/speak", tags=["stt"])

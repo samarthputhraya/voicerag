@@ -734,10 +734,38 @@ def test_require_all_claims_tightens_the_answer_level_decision():
     assert lenient.grounded and not strict.grounded
 
 
-def test_a_contentless_sentence_is_trivially_supported():
+def test_a_contentless_sentence_is_trivially_supported_but_carries_no_weight():
+    """A contentless sentence passes as a *claim* and proves nothing as an *answer*.
+
+    This test previously asserted that ``verify("Yes.", CONTEXT)`` was grounded.
+    The claim-level verdict is unchanged -- "Yes." has no content tokens, so
+    there is nothing to contradict and it stays ``trivial``/supported. What
+    changed is the aggregation: a trivial claim now carries weight 0 instead of
+    1, so it cannot lift the answer-level mean.
+
+    An answer made of nothing else therefore has no verifiable content at all,
+    and "we checked nothing, so it is grounded" is not a defensible reading of a
+    guardrail. It is the same failure shape that let "Mumbai." through with a
+    score of 1.00: a measurement that cannot fail, reported as if it had passed.
+    """
     v = GroundingChecker().verify("Yes.", CONTEXT)
     assert v.per_claim[0].method == "trivial"
-    assert v.grounded
+    assert v.per_claim[0].supported
+    assert not v.grounded
+    assert v.score == 0.0
+
+
+def test_a_trivial_sentence_does_not_inflate_a_real_answer():
+    """The regression the weighting exists to prevent.
+
+    "Yes." alongside a genuinely weak sentence used to contribute a full 1.0 to
+    the mean, which could carry a poorly-supported answer over the threshold.
+    """
+    checker = GroundingChecker()
+    alone = checker.verify("The Eiffel Tower is 9000 metres tall.", CONTEXT)
+    padded = checker.verify("Yes. The Eiffel Tower is 9000 metres tall.", CONTEXT)
+    assert padded.score == pytest.approx(alone.score)
+    assert padded.grounded == alone.grounded
 
 
 def test_an_empty_answer_is_not_grounded():

@@ -175,6 +175,82 @@ by the unspoofable global ceiling — probed at 1000 req/s), and the 429-on-a-PO
 with an undrained body does *not* reset the connection (uvicorn drains it and
 h11 returns to IDLE; confirmed here over a real socket with a 3500-char body).
 
+### The wrong-answer bug: grounding certified a fabrication at 1.00
+
+Reported from the live demo: *"it says mumbai is the capital of india"*.
+Reproduced immediately, and the diagnosis is worth keeping because the guardrail
+did not fail loudly — it **passed**, with a perfect score.
+
+Asked "what is the capital of India", retrieval returns five passages about
+India: a map page, a geography paragraph, two about the name *Bharata*, a travel
+visa page. **None says what the capital is.** The model answered `"Mumbai. [2]"`,
+and grounding scored it **1.0, fully supported**.
+
+Two independent defects, both in `guardrails/grounding.py`:
+
+1. **A one-token claim is a presence test, not a measurement.** `"Mumbai."`
+   reduces to the single content token `mumbai`. One of the five passages
+   mentions the city in passing, so coverage came out **1/1 = 1.0**. With one
+   token the metric has only two possible values, and a 1 means the word occurs
+   somewhere — not that the passage asserts the claim. `min_claim_tokens` (2)
+   now marks such claims `unverifiable`; they cannot pass.
+2. **The citation marker was scored as its own claim.** The sentence splitter
+   ends a sentence at the full stop in `"Mumbai. [2]"`, stranding `"[2]"` as a
+   claim with no content tokens — which took the `trivial` branch and returned
+   **supported, 1.0**, pulling the answer-level mean up. Worse, the citation was
+   detached from the sentence it belongs to, so the cited-passage check ran
+   against the wrong claim. Citation-only fragments are now folded back into the
+   preceding sentence.
+
+Also: a `trivial` claim now carries **weight 0** in the answer-level mean instead
+of weight 1. It asserts nothing, so it should neither help nor hurt; at weight 1
+it could lift a weak answer over the bar. An answer made of *nothing but* trivial
+sentences therefore scores 0.0 and is refused — "we verified nothing, so it is
+grounded" is not a defensible reading of a guardrail.
+
+`"what is the capital of India"` now declines. `reports/guardrails_e2e.json` was
+regenerated on this code at the same sample size as the committed baseline:
+
+| | before | after |
+|---|---:|---:|
+| false-abstention rate | 0.600 | **0.182** |
+| precision | 0.308 | **0.714** |
+| F1 | 0.400 | **0.556** |
+| balanced accuracy | 0.486 | **0.636** |
+| refusals from grounding | 7 | **1** |
+| adversarial probes refused | — | **9/9** |
+
+**Do not read that whole delta as this fix.** The baseline artifact predates
+other work, and Groq samples — re-running `verify_examples.py` gave different
+grounding scores for identical questions (`corporation` 0.70 → 0.90, `xbox`
+0.87 → 0.72), so run-to-run variance is real and large. What *is* deterministic
+and directly verified: `"Mumbai. [2]"` scores 0.0 and is refused, 555 tests pass,
+and all nine adversarial probes still refuse.
+
+### The example chips promised answers the corpus could not keep
+
+The other half of the same report: *"it says restricted even when I read out the
+questions listed in the box"*. `GET /examples` sampled the shard's own
+`answerable: True` labels — but that label is a claim about **the dataset**, not
+about this pipeline. Measured: of 21 sampled candidates run end to end,
+**13 were declined — 62%**. The chips were a coin flip.
+
+No cheap signal predicts it; the abstention gate passes them all, so only a real
+generation call tells the truth. `scripts/verify_examples.py` runs candidates
+through the live pipeline and keeps only those that answer, writing
+`reports/examples.json`; `/examples` serves that list when it exists and falls
+back to sampling when it does not. The artifact records the `n_chunks` it was
+built against and is **ignored on a different index**, so it cannot recreate the
+bug it fixes. Ten verified questions ship. `unanswerable_example` is still
+offered separately and labelled — showing the system decline is half of
+requirement 6, and it should happen on purpose.
+
+Regenerate after any change to the index, the prompt or the guardrails:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\verify_examples.py --candidates 30 --keep 10
+```
+
 Two smaller things found while doing it, both instances of the recurring theme
 in §8 rather than new problems:
 

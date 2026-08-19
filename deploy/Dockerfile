@@ -97,6 +97,13 @@ COPY eval/ ./eval/
 COPY scripts/ ./scripts/
 COPY pyproject.toml .
 
+# The verified example chips, if they have been generated. The bracket makes the
+# pattern a glob, which Docker tolerates matching nothing -- a plain
+# `COPY reports/examples.json` fails the build when the file is absent, and a
+# deployment without verified chips should degrade to sampling, not refuse to
+# build. See scripts/verify_examples.py.
+COPY reports/examples.jso[n] ./reports/
+
 # --- model warm-bake ---------------------------------------------------------
 # Pull the static embedding model into the image so the runtime never touches
 # the network.
@@ -174,6 +181,7 @@ ENV PYTHONPATH=/app/src \
     EMBEDDER_SPEC=static:/app/models/embedder \
     CHUNKING_STRATEGY=recursive \
     STATIC_DIR=/app/web \
+    EXAMPLES_FILE=/app/reports/examples.json \
     HOST=0.0.0.0 \
     PORT=8000 \
     ENVIRONMENT=prod \

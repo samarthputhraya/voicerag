@@ -418,6 +418,107 @@ class TestOperational:
         assert response.headers["access-control-allow-origin"] == "https://demo.example"
 
 
+# --- the example chips --------------------------------------------------------
+
+
+class TestExamples:
+    """``GET /examples`` must not offer a question the system then declines.
+
+    The shard labels a query ``answerable: True`` about the *dataset*; whether
+    *this* pipeline answers it is a different question, and the two disagree.
+    "How is caffeine metabolized?" is labelled answerable, retrieves cleanly
+    (gate confidence 0.14, dense_max 0.78) and is refused by the model anyway,
+    because its MS MARCO gold answer is about "fat burning supplements" rather
+    than the biochemistry asked for. A chip is a promise; that one is a promise
+    the corpus cannot keep, and it was on screen.
+    """
+
+    def _artifact(self, tmp_path: Any, n_chunks: int, questions: list[str]) -> Any:
+        path = tmp_path / "examples.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "generated_from": {"n_chunks": n_chunks},
+                    "verified": questions,
+                    "rejected": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_serves_the_verified_list_when_it_matches_the_index(
+        self, corpus: Any, tmp_path: Any
+    ) -> None:
+        client, state = make_client(corpus, ScriptedGenerator(ANSWER))
+        with client:
+            n = state.pipeline.n_chunks
+        path = self._artifact(tmp_path, n, ["Verified one?", "Verified two?"])
+
+        client, _ = make_client(corpus, ScriptedGenerator(ANSWER), examples_file=path)
+        with client:
+            body = client.get("/examples?n=6").json()
+        assert body["examples"] == ["Verified one?", "Verified two?"]
+        assert body["source"] == "verified"
+
+    def test_respects_n(self, corpus: Any, tmp_path: Any) -> None:
+        client, state = make_client(corpus, ScriptedGenerator(ANSWER))
+        with client:
+            n = state.pipeline.n_chunks
+        path = self._artifact(tmp_path, n, [f"Q{i}?" for i in range(10)])
+
+        client, _ = make_client(corpus, ScriptedGenerator(ANSWER), examples_file=path)
+        with client:
+            body = client.get("/examples?n=3").json()
+        assert len(body["examples"]) == 3
+
+    def test_falls_back_when_the_artifact_is_for_a_different_index(
+        self, corpus: Any, tmp_path: Any
+    ) -> None:
+        """The guard that stops this fix from recreating the bug it fixes.
+
+        Questions verified against a 197k-chunk index say nothing about a
+        different one, and serving them there would put unverified chips back on
+        screen while claiming they were checked.
+        """
+        path = self._artifact(tmp_path, 999_999, ["Stale question?"])
+        client, _ = make_client(corpus, ScriptedGenerator(ANSWER), examples_file=path)
+        with client:
+            body = client.get("/examples?n=6").json()
+        assert body["source"] == "sampled"
+        assert "Stale question?" not in body["examples"]
+
+    def test_falls_back_when_absent_or_unreadable(
+        self, corpus: Any, tmp_path: Any
+    ) -> None:
+        """A missing or corrupt artifact must degrade, never fail the request."""
+        missing = tmp_path / "nope.json"
+        client, _ = make_client(corpus, ScriptedGenerator(ANSWER), examples_file=missing)
+        with client:
+            assert client.get("/examples").json()["source"] == "sampled"
+
+        corrupt = tmp_path / "corrupt.json"
+        corrupt.write_text("{not json", encoding="utf-8")
+        client, _ = make_client(corpus, ScriptedGenerator(ANSWER), examples_file=corrupt)
+        with client:
+            response = client.get("/examples")
+        assert response.status_code == 200
+        assert response.json()["source"] == "sampled"
+
+    def test_the_unanswerable_chip_is_still_offered_separately(
+        self, corpus: Any, tmp_path: Any
+    ) -> None:
+        """Showing a refusal is half of requirement 6 and must survive this change."""
+        client, state = make_client(corpus, ScriptedGenerator(ANSWER))
+        with client:
+            n = state.pipeline.n_chunks
+        path = self._artifact(tmp_path, n, ["Verified one?"])
+        client, _ = make_client(corpus, ScriptedGenerator(ANSWER), examples_file=path)
+        with client:
+            body = client.get("/examples").json()
+        assert "unanswerable_example" in body
+
+
 # --- serving the frontend from this origin ------------------------------------
 
 

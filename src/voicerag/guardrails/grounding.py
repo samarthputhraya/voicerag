@@ -386,12 +386,25 @@ class GroundingConfig:
         require_all_claims: If ``True``, any unsupported claim makes the whole
             answer ungrounded. Off by default; the answer-level threshold plus
             hard failures is the shipped policy.
+        min_claim_tokens: Distinct content tokens a claim needs before lexical
+            overlap is allowed to *support* it. Below this the measure is not
+            evidence: with one token, coverage can only be 0 or 1, and 1 means
+            merely that the word occurs somewhere in some passage -- not that
+            the passage asserts the claim. Measured failure this exists to stop:
+            asked "what is the capital of India", the model answered "Mumbai."
+            against five passages that never say Mumbai is the capital (one
+            mentions the city in passing). Coverage was 1/1, the answer scored
+            **1.0**, and a fabrication was served as fully grounded. Claims below
+            the bar are marked ``unverifiable`` and cannot pass; two tokens is
+            the smallest value that makes coverage a ratio rather than a
+            presence test.
         nli_threshold: Entailment probability at which the model layer rescues a
             claim the lexical layer failed.
     """
 
     claim_threshold: float = 0.55
     answer_threshold: float = 0.5
+    min_claim_tokens: int = 2
     coverage_weight: float = 0.75
     check_numbers: bool = True
     check_citations: bool = True
@@ -497,13 +510,31 @@ class GroundingChecker:
         than dropped, because dropping them would silently shrink the
         denominator of the grounding score.
 
+        A fragment that is *only* citation markers is folded back into the
+        sentence before it. The splitter ends a sentence at the full stop in
+        ``"Mumbai. [2]"``, which stranded ``"[2]"`` as a claim of its own: it
+        has no content tokens, so it scored a ``trivial`` 1.0 and pulled the
+        answer-level mean up, while the citation it carries was detached from
+        the sentence it actually belongs to -- so the cited-passage check ran
+        against the wrong claim. Merging fixes both, and cannot merge across a
+        real sentence because a fragment with any content token is left alone.
+
         Args:
             answer: Generated answer text.
 
         Returns:
             Non-empty, stripped sentences in order.
         """
-        return [s.strip() for _, _, s in sentences(answer or "") if s.strip()]
+        out: list[str] = []
+        for _, _, raw in sentences(answer or ""):
+            s = raw.strip()
+            if not s:
+                continue
+            if out and not _CITATION.sub(" ", s).strip():
+                out[-1] = f"{out[-1]} {s}"
+                continue
+            out.append(s)
+        return out
 
     # -- one claim ------------------------------------------------------------
 
@@ -543,6 +574,23 @@ class GroundingChecker:
             return ClaimVerdict(
                 text=claim, supported=True, score=1.0, coverage=1.0, lcs=1.0,
                 citations=cites, method="trivial",
+            )
+
+        # One content token is a presence test, not evidence. Coverage can only
+        # come out 0 or 1, and a 1 says the word occurs in some passage -- which
+        # is exactly how "Mumbai." was scored 1.0 against passages that never
+        # claim Mumbai is the capital of India. Refuse to certify what the
+        # measure cannot distinguish; the NLI layer may still rescue it, and a
+        # model that writes whole sentences (as SYSTEM_PROMPT instructs) never
+        # lands here.
+        if len(set(claim_toks)) < cfg.min_claim_tokens:
+            return ClaimVerdict(
+                text=claim, supported=False, score=0.0, coverage=0.0, lcs=0.0,
+                citations=cites, method="unverifiable",
+                reason=(
+                    f"{len(set(claim_toks))} content token(s) is too few to verify "
+                    f"by lexical overlap"
+                ),
             )
 
         claim_set = set(claim_toks)
@@ -776,8 +824,17 @@ class GroundingChecker:
     ) -> GroundingVerdict:
         """Aggregate claim verdicts into an answer-level decision."""
         cfg = self.config
-        weights = [max(1, len(_tokens(v.text))) for v in verdicts]
-        score = sum(w * v.score for w, v in zip(weights, verdicts)) / sum(weights)
+        # A contentless sentence ("Yes.") is weighted 0 rather than 1. It asserts
+        # nothing, so it should neither help nor hurt -- but at weight 1 it
+        # carried a score of 1.0 into the mean and could lift an otherwise weak
+        # answer over the bar. If an answer is *nothing but* such sentences the
+        # total weight is 0, and an answer with no verifiable content is not a
+        # grounded answer: score 0.0, refused.
+        weights = [0 if v.method == "trivial" else max(1, len(_tokens(v.text))) for v in verdicts]
+        total = sum(weights)
+        score = (
+            sum(w * v.score for w, v in zip(weights, verdicts)) / total if total else 0.0
+        )
         unsupported = [v for v in verdicts if not v.supported]
         hard = any(v.unsupported_numbers or v.invalid_citations or v.unsupported_citations
                    for v in unsupported)
