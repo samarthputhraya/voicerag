@@ -711,9 +711,25 @@ def test_multiple_citations_are_all_parsed():
 
 
 def test_an_off_topic_sentence_is_unsupported():
+    """Off topic and naming somewhere the passages never mention.
+
+    The reason now names *Ecuador* rather than quoting an overlap percentage,
+    because the entity check fires first and is the more specific explanation --
+    a hard failure, like a fabricated numeral. The claim is unsupported either
+    way; only the sentence the user reads got better.
+    """
     v = GroundingChecker().verify("Bananas are mainly grown in Ecuador.", CONTEXT)
     assert not v.grounded
     assert v.unsupported_claims == ["Bananas are mainly grown in Ecuador."]
+    assert v.per_claim[0].unsupported_entities == ("ecuador",)
+    assert "ecuador" in v.per_claim[0].reason
+
+
+def test_an_off_topic_sentence_with_no_names_still_explains_the_overlap():
+    """The low-overlap wording must survive the entity check taking priority."""
+    v = GroundingChecker().verify("Bananas are mainly grown in tropical climates.", CONTEXT)
+    assert not v.grounded
+    assert v.per_claim[0].unsupported_entities == ()
     assert "content words" in v.per_claim[0].reason
 
 
@@ -728,10 +744,45 @@ def test_one_bad_sentence_among_good_ones_is_isolated():
 
 
 def test_require_all_claims_tightens_the_answer_level_decision():
-    answer = "The Eiffel Tower is 330 metres tall. It was designed by Leonardo da Vinci."
+    """The weak sentence must be weak, not *hard*-failing.
+
+    This used to pair a good sentence with "It was designed by Leonardo da
+    Vinci." That no longer demonstrates the flag: a name absent from every
+    passage is now a hard failure, and a hard failure refuses in both modes by
+    design -- the same rule a fabricated numeral has always had. Which is the
+    correct outcome for that sentence, the Eiffel Tower having been built by
+    Gustave Eiffel. The flag is about *weakly supported* claims, so the second
+    sentence is now merely unsupported by overlap, naming nobody.
+    """
+    answer = (
+        "The Eiffel Tower is 330 metres tall. "
+        "It is a popular destination for romantic evening walks."
+    )
     lenient = GroundingChecker().verify(answer, CONTEXT)
     strict = GroundingChecker(GroundingConfig(require_all_claims=True)).verify(answer, CONTEXT)
     assert lenient.grounded and not strict.grounded
+
+
+def test_a_fabricated_name_is_a_hard_failure_in_both_modes():
+    """The behaviour the test above used to rely on, asserted deliberately."""
+    answer = "The Eiffel Tower is 330 metres tall. It was designed by Leonardo da Vinci."
+    lenient = GroundingChecker().verify(answer, CONTEXT)
+    strict = GroundingChecker(GroundingConfig(require_all_claims=True)).verify(answer, CONTEXT)
+    assert not lenient.grounded and not strict.grounded
+    # "da" is below the 3-character floor; both real name tokens are reported.
+    assert lenient.per_claim[1].unsupported_entities == ("leonardo", "vinci")
+    # Gustave Eiffel IS in the passages, so the true attribution still passes.
+    ok = GroundingChecker().verify(
+        "The tower is named after the engineer Gustave Eiffel.", CONTEXT
+    )
+    assert ok.grounded
+
+
+def test_entity_checking_can_be_turned_off():
+    off = GroundingChecker(GroundingConfig(check_entities=False)).verify(
+        "Bananas are mainly grown in Ecuador.", CONTEXT
+    )
+    assert off.per_claim[0].unsupported_entities == ()
 
 
 def test_a_contentless_sentence_is_trivially_supported_but_carries_no_weight():

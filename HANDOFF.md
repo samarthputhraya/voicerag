@@ -251,6 +251,80 @@ Regenerate after any change to the index, the prompt or the guardrails:
 .\.venv\Scripts\python.exe scripts\verify_examples.py --candidates 30 --keep 10
 ```
 
+### The broad sweep: what the system actually scores
+
+`scripts/eval_answer_quality.py` runs three phases over the shipped index and
+writes `reports/answer_quality.json`. Unlike `eval_guardrails_e2e.py`, which
+scores the *gate*, this asks what a judge asks: when it answers, is the answer
+right; when it refuses, should it have.
+
+**Retrieval — 500 queries against the manifest's own `qrels`:**
+
+| R@1 | R@5 | R@10 | MRR@10 | P50 | P70 | P100 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 0.194 | 0.590 | **0.758** | 0.357 | 6.1 ms | 7.1 ms | 66.6 ms |
+
+R@10 0.758 is consistent with the README's published 0.7202 on a different
+sample. **Watch the units when reproducing this:** `qrels` judge at *document*
+level (`p:8d55…`) while retrieval returns *chunks*
+(`recursive:p:8d55…:0:013b…`). Comparing them directly scores 0.000 on
+everything, which is how the first run of this script "found" a catastrophe that
+was not there.
+
+**The gate — 250 per class, no generation:** answerable 12.0% refused,
+unanswerable 16.8%, medians 0.1875 vs 0.2508. It barely separates the classes,
+which is not news — `reports/abstention.md` already scores the retrieval-signal
+gate at balanced accuracy 0.499, chance. It is the stages that read passage
+*text* that do the work, and this run is independent confirmation.
+
+**End to end — 50 queries, real generation:**
+
+| set | result |
+|---|---|
+| answerable | 22/25 answered, token-F1 **0.406** vs gold |
+| unanswerable (MS MARCO label) | 7–8 of 12 refused |
+| out-of-corpus general knowledge | **7/7 refused** |
+| adversarial (harm, injection, filler) | **5/5 refused** |
+| errors | **0** |
+| wall clock | P50 ~550 ms, P100 ~1.7 s |
+
+### Two corrections worth keeping, because both were mine
+
+**"Who is the president of the United States" is not a fabrication.** The sweep
+flagged it, and the flag was wrong. The cited passage ends *"Current President
+The 45th and current President of the United States is Donald J. Trump."* — the
+answer is grounded, cited, and faithful to the corpus. It is **stale in
+wall-clock terms because MS MARCO is a ~2018 crawl**, and a RAG system is
+faithful to its corpus, not to the calendar. That is the honest explanation of
+the "sometimes outdated" report, and there is nothing to fix in the code. The
+probe set now has a `dated_in_corpus` class so it stops crying wolf.
+**Consequence for filming: do not ask a time-sensitive question on camera.**
+
+**The out-of-corpus probes were checked against the store before being trusted.**
+The corpus mentions the places but states none of the facts — "New Delhi"
+appears in 31 chunks (museum listings), "Bangalore" in 16 (flight bookings).
+So refusing "what is the capital of India" is correct, and is not the system
+being timid.
+
+### A third grounding hole, found by the sweep and closed
+
+Coverage is a **bulk** measure, and the one token carrying the whole fact can go
+missing without moving it much. `check_entities` now fails a claim naming
+someone the passages never mention, exactly as a fabricated numeral has always
+failed one — *"It was designed by Leonardo da Vinci"* against Eiffel Tower
+passages is now a hard failure in both lenient and strict modes, while *"named
+after the engineer Gustave Eiffel"* still passes because that name is there.
+Cost: grounding p50 0.317 → 0.438 ms against a 10 ms budget, and no measurable
+change in answer rate on the same 25 answerable questions (22/25 both runs,
+token-F1 0.4051 → 0.4057).
+
+**On run-to-run variance, which matters for reading any of these numbers.** Groq
+samples: the identical sweep at the same seed refused a different subset of
+answerable questions on the second run (`breathe`, `highest amount in us dollar
+bill` and `food scientist` flipped to answered; `mannitol` flipped to refused).
+Treat single-run deltas under a few points as noise, and re-run before believing
+a regression.
+
 Two smaller things found while doing it, both instances of the recurring theme
 in §8 rather than new problems:
 

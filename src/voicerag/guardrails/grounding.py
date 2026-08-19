@@ -66,6 +66,7 @@ __all__ = [
     "GroundingBackendUnavailable",
     "load_nli",
     "extract_numbers",
+    "extract_entities",
 ]
 
 
@@ -125,6 +126,9 @@ _WORD = re.compile(r"[^\W_]+", re.UNICODE)
 #: Currency/percent aware numeral. Handles ``1,234.5``, ``$40``, ``12%``, years.
 _NUMBER = re.compile(r"(?<![\w.])[-+]?\d[\d,]*(?:\.\d+)?%?")
 _CITATION = re.compile(r"\[(\d+(?:\s*[,;]\s*\d+)*)\]")
+# Alphabetic words only: `_WORD` also matches digits, which the numeral check
+# already owns and which would double-report a fabricated year as an entity.
+_ENTITY_WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
 _MONTHS = frozenset(
     "january february march april may june july august september october "
     "november december jan feb mar apr jun jul aug sep sept oct nov dec".split()
@@ -244,6 +248,48 @@ def extract_numbers(text: str) -> set[str]:
     return out
 
 
+def extract_entities(text: str) -> set[str]:
+    """Capitalised words in ``text`` that look like named entities, stemmed.
+
+    The named-entity twin of :func:`extract_numbers`, and it exists for the same
+    reason: coverage is a *bulk* measure, and the one token that carries the
+    whole fact can go missing without moving it much.
+
+    Measured failure. Asked "who is the president of the United States", the
+    model answered "Donald J. Trump is the current President of the United
+    States. [2]" against a passage reading "The President of the United States
+    is the head of state ... and Commander-in-Chief". The passage describes the
+    **office** and never names the holder. "president", "united", "states" and
+    "current" all appear, so coverage cleared the bar -- and the only tokens
+    that did not appear were the two that answered the question. The name came
+    from the model's parametric memory, which is also how a stale answer gets
+    in: the corpus does not date, the model does.
+
+    The first alphabetic token of the claim is skipped, because an ordinary
+    sentence starts with a capital ("Print an Excel sheet...") and flagging that
+    would refuse honest answers. One unsupported name is enough to fail a claim,
+    so skipping the first costs nothing on a multi-word entity.
+
+    Args:
+        text: One claim, citation markers already removed.
+
+    Returns:
+        Stemmed lowercase forms of the capitalised tokens, so comparison against
+        context tokens is symmetric with every other check here.
+    """
+    out: set[str] = set()
+    for i, m in enumerate(_ENTITY_WORD.finditer(text)):
+        if i == 0:
+            continue  # sentence-initial capital, not evidence of a name
+        word = m.group(0)
+        if len(word) < 3 or not word[0].isupper():
+            continue
+        toks = _tokens(word)
+        if toks:
+            out.add(toks[0])
+    return out
+
+
 def _lcs_length(a: Sequence[str], b: Sequence[str]) -> int:
     """Longest common subsequence length, O(len(a) * len(b)) time, O(len(b)) space.
 
@@ -286,6 +332,8 @@ class ClaimVerdict:
             not support this sentence.
         unsupported_numbers: Numerals and dates in the claim that appear in no
             retrieved passage. Any entry here fails the claim outright.
+        unsupported_entities: Capitalised names in the claim that appear in no
+            retrieved passage. Fails the claim outright, like a bad numeral.
         method: Which layer decided -- ``"lexical"``, ``"nli"`` or
             ``"trivial"`` (a sentence with no content tokens, e.g. "Yes.").
         reason: Why it failed, empty when supported.
@@ -302,6 +350,7 @@ class ClaimVerdict:
     invalid_citations: tuple[int, ...] = ()
     unsupported_citations: tuple[int, ...] = ()
     unsupported_numbers: tuple[str, ...] = ()
+    unsupported_entities: tuple[str, ...] = ()
     method: str = "lexical"
     reason: str = ""
 
@@ -318,6 +367,7 @@ class ClaimVerdict:
             "invalid_citations": list(self.invalid_citations),
             "unsupported_citations": list(self.unsupported_citations),
             "unsupported_numbers": list(self.unsupported_numbers),
+            "unsupported_entities": list(self.unsupported_entities),
             "method": self.method,
             "reason": self.reason,
         }
@@ -377,6 +427,14 @@ class GroundingConfig:
             remainder comes from the LCS ratio.
         check_numbers: Enforce exact numeral/date presence. A fabricated number
             fails its claim regardless of how well the words overlap.
+        check_entities: The same rule for capitalised names. Coverage is a bulk
+            measure and the token carrying the whole fact can go missing without
+            moving it: "Donald J. Trump is the current President of the United
+            States" scored well against a passage describing the *office* and
+            never naming the holder, because every token except the name
+            appeared. A name the passages do not contain fails the claim. This
+            is also the only check that catches a **stale** answer -- the corpus
+            does not date, the model's parametric memory does.
         check_citations: Validate inline ``[n]`` markers.
         citation_support_threshold: Coverage a *cited* passage must reach for
             the citation to count as honest. Lower than ``claim_threshold``
@@ -407,6 +465,7 @@ class GroundingConfig:
     min_claim_tokens: int = 2
     coverage_weight: float = 0.75
     check_numbers: bool = True
+    check_entities: bool = True
     check_citations: bool = True
     citation_support_threshold: float = 0.35
     max_context_tokens: int = 400
@@ -419,6 +478,7 @@ class GroundingConfig:
             "answer_threshold": self.answer_threshold,
             "coverage_weight": self.coverage_weight,
             "check_numbers": self.check_numbers,
+            "check_entities": self.check_entities,
             "check_citations": self.check_citations,
             "citation_support_threshold": self.citation_support_threshold,
             "max_context_tokens": self.max_context_tokens,
@@ -485,19 +545,26 @@ class GroundingChecker:
 
     # -- preparation ----------------------------------------------------------
 
-    def _prepare(self, contexts: Sequence[Any]) -> tuple[list[list[str]], set[str], list[str | None]]:
+    def _prepare(self, contexts: Sequence[Any]) -> tuple[list[list[str]], set[str], list[str | None], set[str]]:
         """Tokenise the context once, not once per claim.
 
         Returns:
-            ``(token lists, union of all numerals, chunk ids)``.
+            ``(token lists, union of all numerals, chunk ids, full vocabulary)``.
+
+            The vocabulary is deliberately built from the **untruncated** text,
+            unlike the token lists, which are capped for the LCS pass. A name
+            that appears only past the cap is still present in the evidence, and
+            refusing over it would be an artefact of a performance bound.
         """
         cap = self.config.max_context_tokens
         texts = [_context_text(c) for c in contexts]
         toks = [_tokens(t)[:cap] for t in texts]
         numbers: set[str] = set()
+        vocab: set[str] = set()
         for t in texts:
             numbers |= extract_numbers(t)
-        return toks, numbers, [_context_id(c) for c in contexts]
+            vocab |= set(_tokens(t))
+        return toks, numbers, [_context_id(c) for c in contexts], vocab
 
     @staticmethod
     def split_claims(answer: str) -> list[str]:
@@ -543,7 +610,7 @@ class GroundingChecker:
         claim: str,
         contexts: Sequence[Any],
         *,
-        prepared: tuple[list[list[str]], set[str], list[str | None]] | None = None,
+        prepared: tuple[list[list[str]], set[str], list[str | None], set[str]] | None = None,
     ) -> ClaimVerdict:
         """Check a single sentence. Public so a streaming caller can check
         sentences as they complete instead of waiting for the final token.
@@ -562,7 +629,7 @@ class GroundingChecker:
             lexical score; a claim can only *pass* by clearing the threshold.
         """
         cfg = self.config
-        ctx_toks, ctx_numbers, ctx_ids = prepared or self._prepare(contexts)
+        ctx_toks, ctx_numbers, ctx_ids, ctx_vocab = prepared or self._prepare(contexts)
 
         # Citation markers are addressing metadata, not content: leaving "[2]"
         # in inflates neither overlap nor numeral checks if we strip it first.
@@ -646,6 +713,16 @@ class GroundingChecker:
                     "states " + ", ".join(missing) + ", which appears in no retrieved passage"
                 )
 
+        bad_entities: tuple[str, ...] = ()
+        if cfg.check_entities:
+            missing_ents = sorted(extract_entities(body) - ctx_vocab)
+            if missing_ents:
+                bad_entities = tuple(missing_ents)
+                reasons.append(
+                    "names " + ", ".join(missing_ents)
+                    + ", which appears in no retrieved passage"
+                )
+
         invalid: tuple[int, ...] = ()
         unsupported_cites: tuple[int, ...] = ()
         if cfg.check_citations and cites:
@@ -697,7 +774,7 @@ class GroundingChecker:
                         + ", which does not contain this statement"
                     )
 
-        hard_fail = bool(bad_numbers or invalid or unsupported_cites)
+        hard_fail = bool(bad_numbers or bad_entities or invalid or unsupported_cites)
         supported = best_score >= cfg.claim_threshold and not hard_fail
         if not supported and not reasons:
             # Phrased as a verb phrase, like every other reason above, because
@@ -722,6 +799,7 @@ class GroundingChecker:
             invalid_citations=invalid,
             unsupported_citations=unsupported_cites,
             unsupported_numbers=bad_numbers,
+            unsupported_entities=bad_entities,
             method="lexical",
             reason="" if supported else "; ".join(reasons),
         )
@@ -804,7 +882,7 @@ class GroundingChecker:
         assert self.nli is not None
         consulted = False
         for v in verdicts:
-            if v.supported or v.unsupported_numbers or v.invalid_citations:
+            if v.supported or v.unsupported_numbers or v.unsupported_entities or v.invalid_citations:
                 continue
             consulted = True
             best = 0.0
@@ -836,7 +914,8 @@ class GroundingChecker:
             sum(w * v.score for w, v in zip(weights, verdicts)) / total if total else 0.0
         )
         unsupported = [v for v in verdicts if not v.supported]
-        hard = any(v.unsupported_numbers or v.invalid_citations or v.unsupported_citations
+        hard = any(v.unsupported_numbers or v.unsupported_entities
+                   or v.invalid_citations or v.unsupported_citations
                    for v in unsupported)
         grounded = (
             not hard

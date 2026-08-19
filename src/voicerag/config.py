@@ -260,6 +260,11 @@ class Settings(BaseSettings):
     # passages that never say Mumbai is the capital, and the fabrication was
     # served as fully grounded. See GroundingConfig.min_claim_tokens.
     grounding_min_claim_tokens: int = Field(default=2, ge=1, le=10)
+    # A capitalised name the passages never contain fails its claim, exactly as a
+    # fabricated numeral does. Catches the stale-parametric-memory failure:
+    # "Donald J. Trump is the current President of the United States" against a
+    # passage that describes the office and never names the holder.
+    grounding_check_entities: bool = Field(default=True)
     answer_on_ungrounded: bool = Field(
         default=False,
         description=(

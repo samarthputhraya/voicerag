@@ -1167,6 +1167,7 @@ def build_policy(settings: Settings | None = None) -> GuardrailPolicy:
                 claim_threshold=cfg.grounding_claim_threshold,
                 answer_threshold=cfg.grounding_answer_threshold,
                 min_claim_tokens=cfg.grounding_min_claim_tokens,
+                check_entities=cfg.grounding_check_entities,
             )
         ),
         answer_on_ungrounded=cfg.answer_on_ungrounded,
