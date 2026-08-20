@@ -718,6 +718,11 @@ def _register_routes(
             body = await request.json()
         except Exception:  # noqa: BLE001
             body = {}
+        if not isinstance(body, dict):
+            # Valid JSON that is not an object -- '"hello"', '[1,2]', '42' --
+            # parsed fine and then blew up on .get() with a 500. Treat it as
+            # the empty body it effectively is; the empty_text 400 answers.
+            body = {}
         text = str(body.get("text") or "").strip()
         language = str(body.get("language_code") or "en-IN")
         if not text:

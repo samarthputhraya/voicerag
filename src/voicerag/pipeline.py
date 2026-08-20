@@ -54,7 +54,7 @@ from .generate.prompt import parse_answer, render, usable_passages
 from .generate.router import GenerationRouter
 from .guardrails.grounding import ClaimVerdict, GroundingVerdict
 from .guardrails.policy import GuardrailPolicy, GuardrailReport
-from .harness.resilience import AllProvidersFailed, BudgetExhausted, Deadline
+from .harness.resilience import AllProvidersFailed, Deadline, TransientError
 from .harness.trace import Span, Trace, traced
 from .index.hybrid import HybridIndex, RetrievalHit
 from .index.store import ChunkStore
@@ -875,7 +875,12 @@ class RagPipeline:
                             truncated = True
                             trace.mark("generate.truncated", reason="deadline")
                             break
-                except (AllProvidersFailed, BudgetExhausted) as exc:
+                except (AllProvidersFailed, TransientError) as exc:
+                    # TransientError, not just BudgetExhausted (its subclass):
+                    # the router re-raises a mid-stream fault once text has been
+                    # emitted, and letting it escape turned a half-streamed
+                    # answer into a 500. Whatever was streamed is finalised
+                    # below — grounding still gets the last word on it.
                     failure = f"{type(exc).__name__}: {exc}"
                     trace.mark("generate.failed", error=failure)
                 except asyncio.TimeoutError:
@@ -893,11 +898,26 @@ class RagPipeline:
                     question, input_verdict=input_verdict, abstention_verdict=abstention
                 )
                 report.abstained = True
-                report.abstain_reason = (
-                    "Every generation provider failed, so no answer was produced."
-                    if failure
-                    else "The generator returned nothing."
+                # A quota exhaustion is the demo's likeliest failure (Groq's
+                # free tier is ~4 answers/min, shared by every viewer) and
+                # "every provider failed" reads as a broken build when the
+                # truth is a full minute-window. Name the real cause; the
+                # generic wording stays for genuinely unexplained failures.
+                quota_hit = failure is not None and any(
+                    marker in failure.lower()
+                    for marker in ("429", "rate limit", "circuit open")
                 )
+                if quota_hit:
+                    report.abstain_reason = (
+                        "The demo's shared free-tier answer quota is used up "
+                        "for this minute — please try again in about 30 seconds."
+                    )
+                elif failure:
+                    report.abstain_reason = (
+                        "Every generation provider failed, so no answer was produced."
+                    )
+                else:
+                    report.abstain_reason = "The generator returned nothing."
                 yield _final(
                     answer=report.abstain_reason,
                     citations=_citations(chunks, hits, ()),

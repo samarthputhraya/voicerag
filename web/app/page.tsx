@@ -212,6 +212,9 @@ export default function Home() {
   const preRollRef = useRef<Float32Array[]>([]);
   const abortRef = useRef<(() => void) | null>(null);
   const lastSpecRef = useRef("");
+  // Set when getUserMedia rejects; vad-react never reflects that into
+  // `vad.errored`, so this is the only record the retry path can consult.
+  const micDeadRef = useRef<string | null>(null);
   const clockRef = useRef(0);
 
   useEffect(() => {
@@ -343,7 +346,13 @@ export default function Home() {
           setStages(split.pipeline);
           setPipelineMs(split.pipelineMs);
           setGenerationMs(split.generationMs);
-          setHistory((h) => [...h, split.pipelineMs]);
+          // An input-guard block never retrieves, so its ~0.03 ms "pipeline"
+          // would enter the history and drag P50 to 0.0 ms — the headline
+          // metric reading as broken instrumentation. Gate and grounding
+          // refusals stay in: their retrieval genuinely ran.
+          if (res.guardrails?.input_allowed !== false) {
+            setHistory((h) => [...h, split.pipelineMs]);
+          }
           setPhase("done");
           if (process.env.NODE_ENV === "development") {
             console.debug("wall-clock incl. network", wall.toFixed(1), "ms");
@@ -387,7 +396,7 @@ export default function Home() {
           break;
         case "error":
           if (e.fatal) {
-            setError(`Speech recognition failed: ${e.text}`);
+            setError(`Speech recognition failed: ${e.text}. Typing still works.`);
             setPhase("error");
             sttRef.current?.close();
             sttRef.current = null;
@@ -434,7 +443,9 @@ export default function Home() {
       sttRef.current = stt;
 
       void stt.connect(onTranscript).catch((e: unknown) => {
-        setError(`Speech recognition failed: ${(e as Error).message}`);
+        setError(
+          `Speech recognition failed: ${(e as Error).message}. Typing still works.`,
+        );
         setPhase("error");
         sttRef.current?.close();
         sttRef.current = null;
@@ -494,6 +505,20 @@ export default function Home() {
       setPhase("idle");
       return;
     }
+    // A getUserMedia rejection puts the vad-web INSTANCE in "errored" but
+    // never sets the react-level `vad.errored` (only the mount-time setup
+    // does), and MicVAD.start() in that state resolves successfully as a
+    // no-op — so a second click after "permission denied" erased the banner
+    // and showed "Listening" with no microphone open. Mirror the vad.errored
+    // pre-check with what the first click learned.
+    if (micDeadRef.current) {
+      setError(
+        `Microphone unavailable: ${micDeadRef.current}. ` +
+          `You can still type your question below.`,
+      );
+      setPhase("error");
+      return;
+    }
     // `useMicVAD`'s `start()` is a no-op when the model failed to load: it is
     // written as `if (!loading && !errored) { await vad?.start() }` and then
     // resolves either way. So an errored VAD produced a *successful* promise,
@@ -514,8 +539,9 @@ export default function Home() {
     void Promise.resolve(vad.start())
       .then(() => setPhase("listening"))
       .catch((e: unknown) => {
+        micDeadRef.current = (e as Error)?.message ?? "permission denied";
         setError(
-          `Microphone unavailable: ${(e as Error)?.message ?? "permission denied"}. ` +
+          `Microphone unavailable: ${micDeadRef.current}. ` +
             `You can still type your question below.`,
         );
         setPhase("error");
@@ -742,6 +768,10 @@ export default function Home() {
             aria-label="Type a question"
             readOnly={phase === "thinking" || phase === "answering"}
             aria-busy={phase === "thinking" || phase === "answering"}
+            // The API schema caps a question at 4000 chars and answers a
+            // longer one with a bare 422; clamping the paste here lets the
+            // input guard deliver its polite too-long refusal instead.
+            maxLength={4000}
           />
           <button type="submit" disabled={!typed.trim()}>
             Ask
@@ -782,6 +812,10 @@ export default function Home() {
                   title="Labelled unanswerable in MS MARCO — watch it decline rather than guess"
                 >
                   {unanswerable}
+                  {/* The hover title never surfaces on touch, and this chip
+                      sits under a heading promising answers — without a
+                      visible label its deliberate refusal reads as a bug. */}
+                  <span aria-hidden="true"> · watch it decline</span>
                 </button>
               )}
             </div>
@@ -825,7 +859,7 @@ export default function Home() {
                 <span className="searching">
                   searching{" "}
                   {stats ? stats.chunks.toLocaleString() : "the"} indexed
-                  passages
+                  chunks
                 </span>
               ) : abstained ? (
                 "The system declined to answer."
@@ -954,8 +988,10 @@ function GuardrailPanel({
   // typeof, not !== undefined: the API serialises "grounding did not run" as
   // JSON null, and `null !== undefined` is true — so the guard never fired and
   // a skipped check rendered as a green "0%" captioned "every claim traced".
-  const scored =
-    !report.abstained && typeof report.grounding_score === "number";
+  // No abstained-check: a numeric score only exists when grounding actually
+  // ran, and hiding it on a grounding-caused refusal made this card claim
+  // "nothing was asserted" about the very check that vetoed the draft.
+  const scored = typeof report.grounding_score === "number";
   const grounding = scored
     ? `${((report.grounding_score ?? 0) * 100).toFixed(0)}%`
     : "not applicable";
@@ -987,10 +1023,18 @@ function GuardrailPanel({
           // Never abstain_reason: on every abstained exit the response answer
           // IS abstain_reason, so this card was reprinting — verbatim — the
           // refusal sentence the judge just read in the answer card above it.
-          // The gate confidence is the number that card cannot show.
+          // The gate confidence is the number that card cannot show — but only
+          // when the GATE made the call: an input-guard block or a grounding
+          // veto stamped with the gate's (passing) confidence read as
+          // "abstention gate 100% confident" under an Input card saying
+          // Blocked. Attribute the refusal to the stage that made it.
           note={
             report.abstained
-              ? `abstention gate ${gatePct}% confident the corpus cannot answer this`
+              ? !report.input_allowed
+                ? "blocked at the input guard, before retrieval ran"
+                : report.grounded === false
+                  ? "grounding could not verify the drafted answer against its cited passages"
+                  : `abstention gate ${gatePct}% confident the corpus cannot answer this`
               : `gate confidence ${gatePct}% — under the refusal bar, so answering was allowed`
           }
           // Declining is the system working, not failing. Colouring it red

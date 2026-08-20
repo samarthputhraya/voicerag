@@ -145,9 +145,10 @@ class ScriptedGenerator(Generator):
 class FailingGenerator(Generator):
     """Fails before emitting anything, which is the only failure a router can hide."""
 
-    def __init__(self, *, name: str = "broken") -> None:
+    def __init__(self, *, name: str = "broken", message: str = "provider is down") -> None:
         super().__init__(model="broken-1", max_tokens=80)
         self.name = name
+        self.message = message
         self.calls = 0
 
     async def _stream_deltas(
@@ -155,8 +156,29 @@ class FailingGenerator(Generator):
     ) -> AsyncIterator[str]:
         del system, user, meta
         self.calls += 1
-        raise TransientError("provider is down")
+        raise TransientError(self.message)
         yield ""  # pragma: no cover - unreachable, required to make this a generator
+
+
+class MidStreamFailingGenerator(Generator):
+    """Emits a complete sentence and then dies.
+
+    The shape of a network fault after streaming began. The router deliberately
+    re-raises it -- a fallback provider cannot continue another's half-answer --
+    so the pipeline is the layer that must absorb it.
+    """
+
+    def __init__(self, answer: str, *, name: str = "flaky") -> None:
+        super().__init__(model="flaky-1", max_tokens=80)
+        self.name = name
+        self.answer = answer
+
+    async def _stream_deltas(
+        self, system: str, user: str, *, meta: MutableMapping[str, Any], **kwargs: Any
+    ) -> AsyncIterator[str]:
+        del system, user, meta
+        yield self.answer
+        raise TransientError("connection reset mid-stream")
 
 
 def make_settings(**overrides: Any) -> Settings:
@@ -438,6 +460,32 @@ class TestResilience:
         assert response.abstained
         assert response.provider == "none"
         assert "provider" in (response.abstain_reason or "").lower()
+
+    async def test_quota_exhaustion_is_named_not_generic(self, corpus: Any) -> None:
+        """A 429-shaped failure explains the quota window instead of "everything failed".
+
+        Groq's free tier is the demo's likeliest live failure; "every provider
+        failed" reads as a broken build when the truth is a full minute-window.
+        """
+        broke = FailingGenerator(name="groq", message="429 Too Many Requests: rate limit reached")
+        pipeline = make_pipeline(corpus, broke)
+        response = await pipeline.answer("how far does Corvane Bridge span")
+        assert response.abstained
+        assert response.provider == "none"
+        assert "quota" in (response.abstain_reason or "").lower()
+
+    async def test_mid_stream_failure_finalises_the_partial_answer(self, corpus: Any) -> None:
+        """A provider dying after tokens streamed degrades to the streamed text.
+
+        The router re-raises once text has been emitted, so the pipeline must
+        absorb it: letting it escape turned a half-streamed answer into a 500
+        on /ask and a red banner over discarded tokens on /ask/stream.
+        """
+        flaky = MidStreamFailingGenerator("Corvane Bridge spans 1290 metres. [1]", name="flaky")
+        pipeline = make_pipeline(corpus, flaky)
+        response = await pipeline.answer("how far does Corvane Bridge span")
+        assert not response.abstained
+        assert "1290" in response.answer
 
     async def test_no_provider_configured_is_reported_not_crashed(self, corpus: Any) -> None:
         pipeline = make_pipeline(corpus, None)

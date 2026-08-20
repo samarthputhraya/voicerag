@@ -315,6 +315,29 @@ class TestSpeculate:
         assert body["reason"] == "no index loaded"
 
 
+# --- speech synthesis ----------------------------------------------------------
+
+
+class TestSpeak:
+    @pytest.mark.parametrize("body", ['"hello"', "[1, 2]", "42"])
+    def test_non_object_json_body_is_a_400_not_a_500(
+        self, corpus: Any, body: str
+    ) -> None:
+        """Valid JSON that is not an object parsed fine and then 500'd on .get().
+
+        The endpoint parses its own body, so pydantic never vets the shape; a
+        string, list or number must land in the same 400 an empty body gets,
+        not in the global handler.
+        """
+        client, _ = make_client(corpus, ScriptedGenerator(ANSWER, name="alpha"))
+        with client:
+            res = client.post(
+                "/speak", content=body, headers={"content-type": "application/json"}
+            )
+        assert res.status_code == 400
+        assert res.json()["error"] == "empty_text"
+
+
 # --- operational endpoints ----------------------------------------------------
 
 

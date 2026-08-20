@@ -125,7 +125,16 @@ export function streamAnswer(
         body: JSON.stringify({ question, language }),
         signal: ctrl.signal,
       });
-      if (!res.ok || !res.body) throw new Error(`stream failed: ${res.status}`);
+      if (!res.ok || !res.body) {
+        // The server writes real explanations into error bodies — the rate
+        // limiter's 429 says whose quota and how long to wait — and throwing
+        // on status alone discarded them for a bare "stream failed: 429".
+        const body = await res.json().catch(() => null);
+        throw new Error(
+          (body as { message?: string } | null)?.message ??
+            `stream failed: ${res.status}`,
+        );
+      }
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
