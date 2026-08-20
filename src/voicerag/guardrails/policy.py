@@ -315,20 +315,31 @@ class GuardrailPolicy:
                 # a "claim". Quoting that back reads as a bug rather than as a
                 # guardrail working, so name the count instead of the fragment.
                 stub = len(first.strip()) < 12 or len(first.split()) < 3
+                what = "it" if n == 1 else f"{n} of its statements"
                 if stub:
                     return (
-                        f"I drafted an answer but {n} statement(s) weren't supported by "
-                        "the retrieved passages, so I won't state them."
+                        "I drafted an answer and then withheld it: the retrieved "
+                        f"passages do not support {what}."
                     )
                 shown = first if len(first) <= 160 else first[:157].rstrip() + "…"
+                # The withholding is stated *before* the quote, deliberately. The
+                # quoted sentence is the claim that was rejected, and a reader who
+                # skims the opening clause must not mistake it for an assertion --
+                # on screen it is the one line that decides whether this reads as
+                # a guardrail catching a fabrication or as the fabrication itself.
+                if n == 1:
+                    return (
+                        "I drafted an answer and then withheld it: the retrieved "
+                        f"passages do not support the claim “{shown}”{tail}."
+                    )
                 return (
-                    f"I drafted an answer but {n} statement(s) weren't supported by the "
-                    f"retrieved passages, so I won't state them. The first was “{shown}”"
-                    f"{tail}."
+                    "I drafted an answer and then withheld it: the retrieved passages "
+                    f"do not support {what}. The first was “{shown}”{tail}."
                 )
             return (
-                f"The drafted answer only reached {grounding.score:.0%} support against "
-                "the retrieved passages, which is below the bar for stating it as fact."
+                "I drafted an answer and then withheld it: it reached only "
+                f"{grounding.score:.0%} support against the retrieved passages, "
+                "below my bar for stating something as fact."
             )
 
         return "I don't have grounds to answer that from the indexed passages."

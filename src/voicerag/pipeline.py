@@ -949,8 +949,8 @@ class RagPipeline:
                 # choice: it saw the passages, the gate only saw their scores.
                 report.abstained = True
                 report.abstain_reason = (
-                    "The model read the retrieved passages and judged them "
-                    "insufficient, so it declined to answer rather than guess."
+                    "I read the retrieved passages and they do not answer this, "
+                    "so I am declining rather than guessing."
                 )
 
             answer_text = parsed.text
