@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Measure the pipeline against the 200 ms bar and write the latency report.
 
-    python scripts/bench_latency.py --index data/index --iterations 200
+    python scripts/bench_latency.py --index data/index_20k --iterations 200
     python scripts/bench_latency.py --synthetic 300 --iterations 100   # offline
 
 Measures transcript in -> **final** answer token out, which is the quantity the

@@ -26,7 +26,7 @@ in this table is a claim without a number behind it.
 
 | # | Requirement | What we built | Where | Measured |
 |---|---|---|---|---|
-| 1 | Speech-to-text via Sarvam **or** ElevenLabs | Both. Sarvam realtime over a **server-side relay**, because Sarvam accepts no `token` parameter and mints no ephemeral credential — so the browser cannot hold one and the account key must stay server-side | [`stt/sarvam.py`](src/voicerag/stt/sarvam.py), [`stt/elevenlabs.py`](src/voicerag/stt/elevenlabs.py), [`api/stt_relay.py`](src/voicerag/api/stt_relay.py) | 8 ms relay connect; **11 Indian languages** answered end to end |
+| 1 | Speech-to-text via Sarvam **or** ElevenLabs | Both. Sarvam realtime over a **server-side relay**, because Sarvam accepts no `token` parameter and mints no ephemeral credential — so the browser cannot hold one and the account key must stay server-side | [`stt/sarvam.py`](src/voicerag/stt/sarvam.py), [`stt/elevenlabs.py`](src/voicerag/stt/elevenlabs.py), [`api/stt_relay.py`](src/voicerag/api/stt_relay.py) | 8 ms relay connect; **3 languages (Hindi, Bengali, Tamil) verified end to end**, 11 supported via Sarvam translate |
 | 2 | Chunking must be "vast", not naive fixed-size | Six strategies behind one interface, **ablated against real qrels** — and the ablation changed the build | [`chunking/`](src/voicerag/chunking/), [`eval/ablation.py`](eval/ablation.py) | [`reports/ablation.md`](reports/ablation.md) — `recursive` beat the shipped `sentence_window` by 10.5 pts R@10, so we rebuilt |
 | 3 | Under 200 ms | Deadline threaded through every stage, enforced, not asserted | [`harness/resilience.py`](src/voicerag/harness/resilience.py), [`pipeline.py`](src/voicerag/pipeline.py) | **P100 157.3 ms** with modelled decode; **retrieval path 7.3 ms P50 / 23.5 ms P100** fully measured |
 | 4 | P50 / P70 / P100 across many queries | Nearest-rank percentiles, identical definition in Python and in the browser HUD | [`eval/metrics.py`](eval/metrics.py), [`LatencyHud.tsx`](web/components/LatencyHud.tsx) | [`reports/latency.md`](reports/latency.md) — **P50 141.6 / P70 142.9 / P100 157.3 ms**, 200 warm runs |
@@ -81,14 +81,13 @@ report can never disagree.
 
 <!-- BENCHMARK_TABLE_START -->
 Measured on the real index — **197,511 chunks from 196,436 MSMARCO-XI passages**,
-`recursive` chunking, `static:minishlab/potion-base-8M` — over **200 warm runs
-, each on a
-different query drawn from a 2,000-query pool** (200 runs cannot span 2,000
-queries; the pool exists so no query is ever repeated and nothing is cached
-between runs). Reproduce with:
+`recursive` chunking, `static:minishlab/potion-base-8M` — over **200 warm runs,
+each on a different query drawn from a 2,000-query pool** (200 runs cannot span
+2,000 queries; the pool exists so no query is ever repeated and nothing is
+cached between runs). Reproduce with:
 
 ```bash
-python scripts/bench_latency.py --index data/index --iterations 200 --force-simulated
+python scripts/bench_latency.py --index data/index_20k --iterations 200 --force-simulated
 ```
 
 | Series | n | mean | P50 | P70 | P90 | P95 | P100 |
@@ -134,7 +133,7 @@ by preference: `recursive` beat `sentence_window` on recall *and* turned out
 > **What a real Groq call actually costs from India:** ~450–900 ms end-to-end,
 > against ~14 ms of Groq-side compute. The rest is trans-Pacific RTT and queueing
 > — geography, not engineering, and not something a faster index can fix. The
-> live demo therefore runs with `BUDGET_TOTAL_MS=2500`; at 200 ms the deadline
+> live demo therefore runs with `BUDGET_TOTAL_MS=8000`; at 200 ms the deadline
 > correctly truncates a real answer after one word, which is honest but useless.
 > Measured voice-to-answer over the full stack (Sarvam STT → retrieval → Groq →
 > grounded answer with citations) is **~1.1 s after end of speech**.
@@ -273,7 +272,16 @@ queries, at k=10:
 Recall falls as the corpus grows — there are ten times as many plausible
 distractors — and the absolute number a judge should hold us to is **0.7202**,
 not 0.9070. Both are published because deleting either one would mislead: the
-first is how the strategy was chosen, the second is what the demo does.
+first is how the strategy was chosen, the second is what the demo does. An
+independent 500-query sweep against the same served index measures R@10
+**0.758** ([`reports/answer_quality.json`](reports/answer_quality.json)) —
+consistent, on a different sample.
+
+We also built the **full-shard index** — 956,128 chunks, 4.8× this one — and it
+misses the 200 ms bar at P100 **283.3 ms**, for a measured reason (BM25
+posting-list length, not the vector index):
+[`reports/latency_956k.md`](reports/latency_956k.md). The smaller index ships
+on purpose, and that measurement is the evidence.
 
 **This table changed the build.** The index originally shipped with
 `sentence_window`, on the reasoning that small units embed sharply — the argument
@@ -304,8 +312,8 @@ Fusion, with chunking held at the serving strategy:
 | sparse only *(control)* | 0.7628 | 0.4207 | 0.4972 |
 | dense only *(control)* | 0.7511 | 0.3991 | 0.4794 |
 
-Hybrid earns its complexity: RRF beats both single-retriever controls by 2–4
-points of nDCG. But `minmax` and `zscore` both beat RRF, so the configured
+Hybrid earns its complexity: RRF beats both single-retriever controls by
+1.7–3.5 points of nDCG. But `minmax` and `zscore` both beat RRF, so the configured
 default is **not** the best-measured option — recorded here rather than quietly
 switched, because the fusion axis was measured on `sentence_window` chunking and
 needs re-running against `recursive` before the default moves.
@@ -345,8 +353,8 @@ extraction, lexical entailment against retrieved chunks, exact checking of
 numbers and dates (the things that hallucinate most and are cheapest to verify),
 and citation validation. Runs *interleaved* with generation — each sentence is
 verified as it completes, rather than after the last token — so the cost is
-overlapped, not eliminated. It is small but real: **~0.16 ms P50** for 3 claims
-against 3 passages. The shape is the point; the saving is a bonus.
+overlapped, not eliminated. It is small but real: **well under a millisecond at
+P50** against a 10 ms stage budget. The shape is the point; the saving is a bonus.
 
 ### What the guardrails actually score
 
@@ -376,8 +384,11 @@ does **not** mean nothing relevant was retrieved; it means the retrieved
 passages, which are on topic, do not happen to contain the answer. *"why does
 my knee hurt on and off"* retrieves plenty of knee-pain passages, none about
 your knee. A gate whose only inputs are retrieval scores is structurally blind
-to that, and the measured confidence distribution says so directly: **answerable
-median 0.307, unanswerable median 0.305.** No threshold separates those. It is a
+to that, and the measured confidence distribution says so directly: over **250
+queries per class** on the served index, the gate's median confidence is
+**0.188 on answerable and 0.251 on unanswerable** questions
+([`reports/answer_quality.json`](reports/answer_quality.json)) — distributions
+too entangled for any threshold to separate cleanly. It is a
 feature-information problem, not a tuning problem, and recalibrating it makes
 things worse — the fitted model reaches F1 0.777 only by abstaining on **91.2%
 of answerable questions**, which is below the always-abstain baseline.
@@ -386,6 +397,22 @@ So the gate is left on its priors, where it does the job it *can* do — rejecti
 genuinely out-of-domain questions, as the Zorblax probe shows — and the work of
 "the passages don't answer this" is done by the two stages that read the passage
 text: the model's own refusal, and grounding.
+
+### What the whole pipeline scores, end to end
+
+One sweep asks what a judge asks: when it answers, is the answer right, and
+when it refuses, should it have. 500 retrieval-only queries plus 50 end-to-end
+runs with **real generation**, all against the served 197,511-chunk index —
+committed as [`reports/answer_quality.json`](reports/answer_quality.json):
+
+| Set | Result |
+|---|---|
+| Retrieval, 500 queries vs the shard's own qrels | R@10 **0.758** · MRR@10 0.357 |
+| Answerable questions, real generation | **22/25 answered**, token-F1 0.406 vs gold |
+| Out-of-corpus general knowledge | **7 of 8 refused** — the one answered is the president question, which is *in* this ~2018 corpus: grounded, cited, and faithful to what the passages say |
+| Adversarial (harm, injection, filler) | **5/5 refused** |
+| Errors | **0** |
+| Wall clock, real Groq calls | P50 ~550 ms |
 
 ---
 
@@ -397,7 +424,7 @@ Not a prompt and a hope. `src/voicerag/harness/`:
 - **RetryPolicy** — exponential backoff with **full jitter**. Fixed backoff makes every client that failed during an outage retry in lockstep and recreate the herd that caused it.
 - **Error taxonomy** — callers classify their own failures. A 401 is `PermanentError` and is never retried; guessing from exception type is how harnesses end up retrying auth failures forever.
 - **CircuitBreaker** — closed → open → half-open. A dead provider is skipped outright rather than adding its full timeout to every request. A failed probe re-opens.
-- **first_healthy** — ordered provider fallback (Groq → Gemini) that skips open circuits.
+- **first_healthy** — ordered provider fallback (Groq → OpenAI → Gemini) that skips open circuits.
 - **Trace** — every published latency number originates here. Spans may overlap, deliberately: `total_ms` is the envelope, `critical_path_ms` is the union of busy intervals, and the gap between them is exactly what the concurrency bought.
 
 ---
@@ -405,13 +432,13 @@ Not a prompt and a hope. `src/voicerag/harness/`:
 ## Architecture
 
 ```
-Browser (Goa)                          API (US-West, co-located with Groq)
-─────────────                          ──────────────────────────────────
+Browser (Goa)                          API (AWS Mumbai, ap-south-1)
+─────────────                          ────────────────────────────
  mic
   ↓ Silero VAD (redemption 260ms)
   ↓ 16kHz PCM
-  ├──────── wss ────────► Sarvam saaras:v3-realtime   (India → India, ~15-40ms)
-  │                          │
+  ├── wss /stt/stream ──► relay ────────► Sarvam saaras:v3-realtime
+  │                          │              (audio stays India → India)
   │  ◄── transcript.partial ─┤
   ├── POST /speculate ──────────────────► warm retrieval cache (cancellable)
   │  ◄── transcript.final ───┘
@@ -421,7 +448,8 @@ Browser (Goa)                          API (US-West, co-located with Groq)
                                           RRF fusion       ~0.1ms
                                           abstention       ~0.2ms
                                           ├─ abstain → return, LLM never called
-                                          └─ prompt → Groq TTFT  ~120ms
+                                          └─ prompt → Groq (US)  TTFT ~120ms
+                                             ↓  modelled; ~450–900ms on a live call
                                              ↓ grounding check runs concurrently
        ◄──── SSE token deltas, then final frame with full trace ────┘
 ```
@@ -431,7 +459,7 @@ Browser (Goa)                          API (US-West, co-located with Groq)
 ## Quickstart
 
 ```bash
-git clone <repo> && cd voicerag
+git clone https://github.com/samarthputhraya/voicerag && cd voicerag
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
 cp .env.example .env    # add SARVAM_API_KEY and GROQ_API_KEY
 
@@ -439,14 +467,18 @@ cp .env.example .env    # add SARVAM_API_KEY and GROQ_API_KEY
 # `recursive` because it won the ablation (reports/ablation.md), and because it
 # is what the served index is built with -- building with anything else here
 # gives you a demo that does not match a single published number.
-python scripts/ingest.py --limit 20000 --strategy recursive --out data/index_20k
+python scripts/ingest.py --download --limit 20000 --strategy recursive \
+    --embedder static:minishlab/potion-base-8M --out data/index_20k
 
 # Prove it works, offline, with no API keys:
 python scripts/smoke.py
 
-# Reproduce our numbers:
-python scripts/run_ablation.py --out reports/ablation.md
-python scripts/bench_latency.py --iterations 200 --out reports/latency.json
+# Reproduce our numbers. (--rows is the ingest row cache: scripts/ingest.py
+# --cache-rows writes it as <out>/rows.jsonl.gz; point --rows at that file.)
+python scripts/run_ablation.py --rows data/raw/rows-20000.jsonl.gz --limit 2000 \
+    --embedder static:minishlab/potion-base-8M --max-queries 400
+python scripts/bench_latency.py --index data/index_20k --iterations 200 \
+    --force-simulated --out reports/latency.json
 
 uvicorn voicerag.api.main:app --reload      # API  :8000
 cd web && npm install && npm run dev        # UI   :3000
@@ -470,6 +502,13 @@ docker build -f deploy/Dockerfile --build-arg INDEX_ROWS=20000 -t voicerag .
 docker run -p 8000:8000 -e SARVAM_API_KEY=... -e GROQ_API_KEY=... voicerag
 ```
 
+**The live demo** (<https://voicerag-demo.duckdns.org>) runs exactly this image
+— prebuilt as `ghcr.io/samarthputhraya/voicerag:demo` (arm64, the full 197,511
+chunks) by [`.github/workflows/arm-image.yml`](.github/workflows/arm-image.yml)
+on a native ARM runner — on an AWS EC2 `t4g.small` in ap-south-1 (Mumbai)
+behind Caddy TLS. Runbook: [`deploy/aws/README.md`](deploy/aws/README.md). The
+paths below are the tested alternatives.
+
 **Oracle Cloud Always Free** (genuinely $0, no sleep-on-idle) — an Ampere A1
 ARM instance with Caddy terminating TLS. Every pinned dependency was checked to
 publish a Linux `aarch64` wheel, `faiss-cpu` included, which matters because it
@@ -479,8 +518,10 @@ before a VM is created.
 
 HTTPS is not optional on that path: `getUserMedia` only works in a secure
 context, so an IP-only HTTP deployment is a voice demo with no voice. Caddy
-obtains a Let's Encrypt certificate automatically, and `<ip>.sslip.io` gives you
-a real hostname without buying a domain.
+obtains a Let's Encrypt certificate automatically, and a free
+[DuckDNS](https://www.duckdns.org) subdomain gives you a real hostname without
+buying a domain — not sslip.io/nip.io, whose shared Let's Encrypt quota is
+exhausted and fails silently (see [`deploy/oracle/README.md`](deploy/oracle/README.md)).
 
 Hugging Face Spaces (CPU Basic: 16 GB at no hourly cost, though *creating* a
 Docker Space requires a paid plan — Render's 512 MB `starter` OOMs on this
@@ -583,7 +624,8 @@ src/voicerag/
 eval/           dataset · metrics · ablation · latency · abstention_eval
 web/            Next.js voice UI with live latency HUD; static-exported and
                 served by the API from the same origin
-deploy/         Dockerfile (frontend + API) · huggingface/ · render.yaml
+deploy/         Dockerfile (frontend + API) · aws/ (the shipped runbook)
+                · oracle/ · huggingface/ · render.yaml
 ```
 
 ## License and attribution

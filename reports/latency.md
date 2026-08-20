@@ -2,7 +2,9 @@
 
 Target: **< 200 ms** from transcript in to the **final** answer token (the brief's wording), measured over 200 warm runs across 2000 distinct queries.
 
-> **Generation is SIMULATED in this run.** No LLM credentials were available, so decode timing came from `groq/openai/gpt-oss-20b (vendor-published estimate, NOT measured here)`. Retrieval, guardrail and prompt numbers are real measurements; the generation and total rows are a model of the provider, not an observation of it.
+Configuration (from this run's own `latency.json` meta): `data/index_20k` — **197,511 chunks from 196,436 passages**, `recursive` chunking, `static:minishlab/potion-base-8M`, HNSW m=32 / ef_search=64. The run predates the `mmap_sparse=false` serving fix, i.e. it measured the *slower* memory-mapped BM25 configuration and passed anyway.
+
+> **Generation is SIMULATED in this run** — deliberately, so the benchmark is reproducible and consumes no provider quota. Decode timing came from `groq/openai/gpt-oss-20b (vendor-published estimate, NOT measured here)`. Retrieval, guardrail and prompt numbers are real measurements; the generation and total rows are a model of the provider, not an observation of it. Real-call wall clock is published beside this in the README ("What a real Groq call actually costs from India").
 
 | Series | n | mean | P50 | P70 | P90 | P95 | P99 | P100 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|

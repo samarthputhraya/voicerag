@@ -1,6 +1,8 @@
 ### Abstention (MS MARCO 'No Answer Present.' labels)
 
-Retriever: `sentence_window` chunking, hybrid `rrf` fusion, identical to the ablation above.  
+> Measured on the pre-ablation `sentence_window` build, not the shipped `recursive` index. The finding — the retrieval-signal gate barely separates answerable from unanswerable — is independently confirmed on the shipped 197,511-chunk index by the gate phase of `reports/answer_quality.json`: refusal rates 12.0% vs 16.8%, medians 0.188 vs 0.251, over 250 queries per class.
+
+Retriever: `sentence_window` chunking, hybrid `rrf` fusion, identical to `reports/ablation.md`.  
 Labels are MS MARCO's own: a query is unanswerable when every candidate passage is `is_selected == 0` and the gold answer is `"No Answer Present."`.  
 
 781 unanswerable and 400 answerable queries; decision threshold 0.500 (prior rules). Positive class = *should abstain*.
