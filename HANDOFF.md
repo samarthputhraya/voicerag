@@ -740,6 +740,34 @@ the page's own origin and **refused** from a hostile one, "What is bayern
 munich?" answered at grounding 1.0 in 486 ms, and the pipe-bomb probe refused at
 the input guard in **0 ms with 0 citations**.
 
+#### What is deployed right now, and how to undo it
+
+**Deployed 20 Aug 2026: `46f9e68`** (image id `3cdf2b49849c`, 197,511 chunks).
+Re-verified live after the swap: 27/27 checks — healthz/TLS/UI, the relay's
+origin gating (101 own / 403 hostile), a grounded cited answer at 588 ms, all
+three refusal stages, and the five frontend markers that were confirmed *absent*
+from the previous bundle.
+
+**If anything misbehaves mid-filming, roll back in one command.** The previously
+serving image is tagged on the box so it cannot be lost to a prune:
+
+```bash
+ssh -i <key> ubuntu@65.2.89.179
+cd /opt/voicerag/repo/deploy/oracle
+VOICERAG_IMAGE=voicerag:rollback docker compose up -d      # back to 5f78d191498e
+```
+
+To roll *forward* again: `docker compose up -d` with no override (compose
+defaults to `ghcr.io/samarthputhraya/voicerag:demo`). Keep the `voicerag:rollback`
+tag until the videos are shot; it costs 3 GB of a 16 GB-free disk.
+
+**Deploying a new commit is not a `git push`.** Run the *ARM64 image* workflow
+with `workflow_dispatch` (the push trigger builds a 200-row smoke image and
+does **not** publish), wait for the publish job, then run
+`deploy/oracle/deploy.sh` on the box — it sources `/opt/voicerag/.env`, pulls,
+recreates and waits for both health and the certificate. The site stays up
+throughout the pull; only the container swap is a ~40 s gap.
+
 **Measured headroom on the box:** the app holds 951 MB of 1,836 MB, leaving
 ~456 MB plus 4 GB of swap. Fine for a demo, thin under a dozen simultaneous
 judges. The likelier visible failure is Groq's 8k tok/min free tier rather than
