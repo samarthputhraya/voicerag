@@ -40,3 +40,31 @@ is a promise; these are the promises this corpus cannot keep.
 | How much supervisor pay rate for cvs warehouse? | The model read the retrieved passages and judged them insufficient, so it declined to answer rather than guess. |
 | What is battery life f? | The model read the retrieved passages and judged them insufficient, so it declined to answer rather than guess. |
 | What is bay crest partners? | The indexed passages have nothing on “bay crest partners”, so I'd be guessing: the best passage only reaches 0.43 simila |
+
+## Re-verified against the live deployment, 21 Aug 2026
+
+Every question above was re-run against <https://voicerag-demo.duckdns.org>.
+**All 10 published questions still answer**, grounding 0.83–1.00. **Six of the
+eight rejections still decline. Two now answer:**
+
+| question | then | now |
+|---|---|---|
+| How long should you carb cycle? | declined, best passage 0.54 | **answers** — "Carb cycle 3 days low, 1 day high. [1]" |
+| What is bay crest partners? | declined, best passage 0.43 | **answers**, grounding 1.00, with a cited passage |
+
+This is recorded rather than quietly edited, because the drift is more
+interesting than the table.
+
+Note which ones moved. Both were **retrieval-gate** declines — the mechanism
+that reads similarity and retriever agreement, and the one that ought to be
+deterministic for a fixed index. The four declines that came from the *model*
+reading the passages and judging them insufficient all held. That is the
+opposite of what we would have predicted, and we are not claiming a cause we
+have not established: the chunk count in this deployment matches the one this
+file was generated against, so a plain rebuild does not explain it.
+
+What follows for anyone relying on this file: **a decline listed here is
+evidence, not a guarantee.** If you need a question that reliably refuses — for
+a demo, or a regression test — re-run it first. `How fast does an eagle travel?`
+was re-verified 5/5 on this date, refusing with the same wording every time.
+

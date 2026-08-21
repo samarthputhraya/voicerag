@@ -405,9 +405,15 @@ async def test_groq_reports_a_truncated_answer():
 
 
 async def test_groq_ttft_reflects_the_wait_for_the_first_token():
+    # The first delay is 0.15 s against a 50 ms floor, which looks like more
+    # headroom than the assertion needs. It is not. Windows' default timer
+    # granularity is ~15.6 ms, so a `sleep(0.06)` can be measured at 46.9 ms --
+    # three ticks -- and this test failed intermittently under full-suite load
+    # for exactly that reason. The floor has to clear one tick of quantisation
+    # with room to spare, not by 10 ms.
     chunks = sse(groq_chunk("A"), groq_chunk("B"), groq_chunk("C"))
     gen = GroqGenerator(
-        "k", client=sse_client(chunks, first_delay_s=0.06, delay_s=0.002)
+        "k", client=sse_client(chunks, first_delay_s=0.15, delay_s=0.002)
     )
     result = await gen.complete("s", "u")
     assert result.ttft_ms >= 50

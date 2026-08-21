@@ -36,6 +36,11 @@ a second demo. Showing how you actually worked is free differentiation.
 
 Do not narrate features. Show the work.
 
+> **The words to say are in [`docs/VIDEO_SCRIPT.md`](VIDEO_SCRIPT.md), assigned
+> per person.** The table below is the *shot list* — what the camera sees. Where
+> the two disagree, the script file wins; it is the one checked line-by-line
+> against the committed reports.
+
 | Time | Shot | Voiceover |
 |---|---|---|
 | 0:00–0:08 | Whiteboard/paper with the latency budget written as a column of numbers, someone crossing one out and writing a smaller one | "Two hundred milliseconds, end to end. We started by writing down where every one of them goes." |
@@ -43,8 +48,8 @@ Do not narrate features. Show the work.
 | 0:22–0:36 | Screen: ablation table printing in a terminal, rows filling in | "Then we measured. Recall, MRR, nDCG, against real human relevance judgements from the dataset." |
 | 0:36–0:50 | Two people at a laptop, one pointing at a number; cut to a VAD constant being changed from 1400 to 260 | "Our biggest win wasn't a model. It was a browser setting that waits 1.4 seconds before deciding you've stopped talking. We found it on day two." |
 | 0:50–1:04 | Screen: tests running, green | "Every strategy has tests. Every guardrail has tests. The whole suite runs offline, so it runs anywhere." |
-| 1:04–1:18 | Split screen: someone speaking into a laptop, latency HUD bars painting | "We instrumented every stage, so the demo reports the same numbers the benchmark does. No cherry-picked runs." |
-| 1:18–1:30 | Three of you, to camera, brief | "Three of us, nine days. See you in Goa." |
+| 1:04–1:20 | Screen: the README's negative-result section, scrolled to | "And we publish what lost. Our abstention gate scores at chance against MS MARCO's unanswerable labels." (The "same numbers as the benchmark" claim moved to Video 2, where the HUD is on screen to prove it.) |
+| 1:20–1:30 | Three of you, to camera, brief | "Three of us, nine days. See you in Goa." |
 
 **Shooting notes**
 
@@ -60,12 +65,15 @@ Do not narrate features. Show the work.
 No stated length; **aim for 2:00–2:30.** Judges watch many of these. Front-load
 the proof.
 
+> **Spoken lines, per person: [`docs/VIDEO_SCRIPT.md`](VIDEO_SCRIPT.md).** This
+> table is the shot list. Where the two disagree, the script file wins.
+
 | Time | Beat | What to show |
 |---|---|---|
-| 0:00–0:10 | Cold open — no intro, no logo | Speak a question into the mic. Answer streams back with citations. Latency HUD lands under 200ms. Say nothing until it's done. |
-| 0:10–0:25 | Name what just happened | "Voice in, grounded answer out. That was 180 milliseconds from transcript to final token — measured, not estimated." |
+| 0:00–0:10 | Cold open — no intro, no logo | Speak a **verified** question ("How long does it take cracked ribs to heal?", grounding 0.88). Answer streams back with citations, HUD paints. Say nothing until it's done. |
+| 0:10–0:25 | Name what just happened | Give **both** numbers — the live one the HUD is showing (~1 s after end of speech, mostly LLM round trip) and the pipeline one (142 ms P50). Never the small one alone; see `VIDEO_SCRIPT.md` for the exact wording. |
 | 0:25–0:45 | The HUD | Point at the waterfall: guard, embed, dense ∥ sparse, fusion, abstention, generation. Show P50 / P70 / P100 accumulating across several questions. |
-| 0:45–1:05 | **Ask something the corpus cannot answer** | Show it *decline*, with the reason and the retrieval signals that triggered it. Say: "The brief asked for a system that knows when not to answer. This is that." |
+| 0:45–1:05 | **Ask a question the corpus cannot answer** | Use **"How fast does an eagle travel?"** — verified refused 5/5 against the live deployment. Do **not** use "What is bay crest partners?": it is listed as declined in `reports/examples.md` but the deployment now answers it. Show the reason and the similarity score. |
 | 1:05–1:25 | Speculative retrieval | Ask a longer question. Point at the speculative-search counter incrementing while you are still speaking, then the hit indicator on the final. "Retrieval finished before I stopped talking." |
 | 1:25–1:45 | Cross-lingual | Switch to Hindi. Ask in Hindi, retrieve from English passages, answer grounded. "Same index. Same ground truth." |
 | 1:45–2:05 | The ablation table | On screen briefly. "Six chunking strategies, scored against human relevance judgements. We shipped the one that won, and we can show you why." |
@@ -87,19 +95,19 @@ Vary the wording per person — three identical posts read as spam and reflect b
 
 ### X — version A
 
-> We built a voice RAG pipeline that answers in under 200ms — transcript to final token.
+> Speak a question, get an answer grounded in MS MARCO with citations. About a second, end to end, from India.
 >
-> Six chunking strategies, ablated against real human relevance judgements. Hybrid dense+BM25 retrieval. Guardrails that decline when the corpus can't answer.
+> Our own pipeline — transcript to final token — is 142ms. Almost all the rest is the round trip to a hosted LLM. We publish both numbers.
 >
-> Biggest speedup wasn't a model. It was a VAD constant.
+> Six chunking strategies, ablated against real human relevance judgements. Hybrid dense+BM25. Guardrails that decline when the corpus can't answer.
 >
 > #RAGInGoa
 
 ### X — version B
 
-> Speak a question → grounded answer with citations, in <200ms.
+> Speak a question → grounded answer with citations.
 >
-> The trick: we fire retrieval on *partial* transcripts. By the time you stop talking, the search is already done.
+> The trick: we fire retrieval on *partial* transcripts. By the time you stop talking, the search is already done — retrieval is 7ms of a 142ms pipeline.
 >
 > Built for @247pmstudio HH Goa 2026.
 >
@@ -111,15 +119,15 @@ Vary the wording per person — three identical posts read as spam and reflect b
 >
 > We built six, scored them on Recall@k / MRR / nDCG against human labels, and shipped the winner.
 >
-> Voice in, cited answer out, under 200ms.
+> Voice in, cited answer out — 142ms of pipeline, and we show you where every millisecond went.
 >
 > #RAGInGoa
 
 ### LinkedIn (adapt per person)
 
-> **Voice-enabled RAG, under 200 milliseconds.**
+> **Voice-enabled RAG, and an honest stopwatch.**
 >
-> For HH Goa 2026's shortlisting task we built a pipeline that takes a spoken question and returns an answer grounded in MS MARCO, with citations — transcript to final token in under 200ms, measured at P50/P70/P100 across real queries, not a single lucky run.
+> For HH Goa 2026's shortlisting task we built a pipeline that takes a spoken question and returns an answer grounded in MS MARCO, with citations. Transcript to final token is **142ms at P50**, measured at P50/P70/P100 across real queries, not a single lucky run. End to end from India it is **about a second**, because a hosted LLM call crosses the Pacific — that is geography, not engineering, and we publish both numbers rather than the flattering one.
 >
 > Three things we're proud of:
 >
@@ -137,7 +145,7 @@ Vary the wording per person — three identical posts read as spam and reflect b
 
 ### Instagram (caption — keep it short, the video carries it)
 
-> Speak a question. Get a cited answer. Under 200ms. ⚡
+> Speak a question. Get a cited answer, with a receipt for every millisecond. ⚡
 >
 > Six chunking strategies, benchmarked against real human relevance labels. Retrieval that starts before you finish talking. And guardrails that say "I don't know" when the corpus genuinely doesn't.
 >
@@ -155,13 +163,13 @@ before posting, not after.
 Draft these before opening the form. No resubmissions.
 
 **What did you build?**
-> A voice-enabled RAG system. A spoken question is transcribed by Sarvam's realtime WebSocket STT, retrieved against a hybrid dense + BM25 index over MS MARCO passages from ai4bharat/MSMARCO-XI, and answered by a grounded generation step with inline citations. Transcript to final answer token completes in under 200ms, measured at P50/P70/P100 across real queries.
+> A voice-enabled RAG system. A spoken question is transcribed by Sarvam's realtime WebSocket STT, retrieved against a hybrid dense + BM25 index over MS MARCO passages from ai4bharat/MSMARCO-XI, and answered by a grounded generation step with inline citations. Transcript to final answer token completes in under 200ms (P50 141.6 ms), measured at P50/P70/P100 across real queries with generation simulated so the benchmark is reproducible; with a real hosted-LLM call from India the full voice-to-answer path is ~1.1 s, and both numbers are published in the repo.
 
 **Chunking approach**
 > Six strategies implemented behind one interface and ablated against the dataset's own relevance judgements: fixed-size with overlap (control), recursive separator-hierarchy, sentence-window (retrieve small / read big), metadata-aware prefixing, semantic percentile-boundary, and contextual enrichment. Selection was made on measured Recall@1/5/10, MRR@10 and nDCG@10 rather than by preference. Retrieval is hybrid — dense HNSW and BM25 run concurrently and fuse via Reciprocal Rank Fusion, with component ranks preserved for the abstention logic.
 
 **Latency numbers**
-> P50 / P70 / P100: `<fill from reports/latency.json>`. Measured across `<n>` real queries with warmup runs excluded. Per-stage breakdown published in the repo. Percentiles use the nearest-rank method. Speech-to-text and client network latency are measured and reported separately, matching the brief's own pipeline decomposition.
+> **P50 141.6 ms / P70 142.9 ms / P100 157.3 ms**, transcript in to final answer token, over 200 warm runs across 2,000 distinct queries with warmup excluded (`reports/latency.md`). Percentiles use the nearest-rank method and the per-stage breakdown is published in the repo. Two disclosures we would rather make than be asked for. **Generation is simulated in that run** — deliberately, so the benchmark is reproducible and consumes no provider quota; decode timing comes from a vendor-published estimate, while retrieval, guardrail and prompt numbers are real measurements. And **a real hosted-LLM call from India costs ~450–900 ms end to end**, against ~14 ms of provider-side compute: the remainder is trans-Pacific round trip, which is geography rather than engineering. Measured voice-to-answer over the full stack is **~1.1 s after end of speech**. Both numbers are published, because only the first would overstate the product and only the second would understate the engineering.
 
 **Harness**
 > A structured orchestration layer: a single monotonic Deadline threaded through every stage so a retry that cannot finish in the remaining budget is never attempted; exponential backoff with full jitter; an explicit transient/permanent error taxonomy so non-retryable failures are not retried; per-provider circuit breakers with half-open probing; and ordered provider fallback. Every stage is traced, and every latency number we publish comes from those traces.
