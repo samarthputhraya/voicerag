@@ -2,7 +2,7 @@
 
 Whole chain through the live API -- input guard, retrieval gate, model self-abstention and grounding -- against MS MARCO's own answerability labels. Positive class = *should refuse*.
 
-Index: `recursive` chunking, `static:minishlab/potion-base-8M`, 197,511 chunks. 22 labelled queries scored; 0 excluded; 0 other errors. Regenerated 2026-08-19 on the post-grounding-fix code; the pre-fix baseline (precision 0.308, false-abstention 0.600, 78 excluded to provider failures) is in git history, and the delta is analysed in `HANDOFF.md` -- most of it is the grounding fixes, some is Groq run-to-run variance.
+Index: `recursive` chunking, `static:minishlab/potion-base-8M`, 197,511 chunks. 22 labelled queries scored; 0 excluded; 0 other errors. Regenerated 2026-08-19 on the post-grounding-fix code; the pre-fix baseline (precision 0.308, false-abstention 0.600, 78 excluded to provider failures) is in git history -- most of the delta is the grounding fixes, some is Groq run-to-run variance.
 
 | Precision | Recall | F1 | Accuracy | Balanced acc. | False-abstention |
 |---:|---:|---:|---:|---:|---:|
