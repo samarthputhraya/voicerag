@@ -16,7 +16,7 @@ system working: the corpus is a fixed ~196k-passage slice of MS MARCO, it does
 not contain that fact, and refusing beats inventing one.
 
 > Repo: <https://github.com/samarthputhraya/voicerag> · Live demo:
-> <https://voicerag-demo.duckdns.org> ·
+> <https://voicerag-demo.duckdns.org>
 >
 > `#RAGInGoa`
 
