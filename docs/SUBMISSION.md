@@ -19,13 +19,17 @@ Form: https://forms.gle/MNvCjcv23Hn2Eeu58
 | 5 | Video 2 — demo, end to end | — | ☐ |
 | 6 | Both videos on Instagram ×3 members | all | ☐ |
 | 7 | Both videos on X ×3 members | all | ☐ |
-| 8 | Both videos on LinkedIn ×3 members | all | ☐ |
-| 9 | ≥1 Instagram account public | — | ☐ |
-| 10 | `#RAGInGoa` on every post | all | ☐ |
+| 8 | ≥1 Instagram account public | — | ☐ |
+| 9 | `#RAGInGoa` on every post | all | ☐ |
 
-That is **9 social posts** (3 members × 3 platforms), each carrying both videos
+That is **6 social posts** (3 members × 2 platforms), each carrying both videos
 and the hashtag. Miss one and the submission is non-compliant on a technicality.
 Do them together, in one sitting, with a shared checklist open.
+
+**LinkedIn is not required.** The brief names Instagram and X only. An earlier
+version of this file listed it as a third platform and made this a 9-post job;
+it is not. Copy is still drafted below if you want the post, but do it *after*
+the form is submitted, never before.
 
 ---
 
@@ -90,7 +94,7 @@ the proof.
 
 ## Social copy
 
-Each member posts **both videos** to **Instagram, X, LinkedIn** with `#RAGInGoa`.
+Each member posts **both videos** to **Instagram and X** with `#RAGInGoa`. LinkedIn is optional and not part of the brief.
 
 **One caption per person, not one copied three times.** Each person leads with a
 different angle, so a reply lands on someone who can answer it — and three
