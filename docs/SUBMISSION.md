@@ -91,37 +91,105 @@ the proof.
 ## Social copy
 
 Each member posts **both videos** to **Instagram, X, LinkedIn** with `#RAGInGoa`.
-Vary the wording per person — three identical posts read as spam and reflect badly.
 
-### X — version A
+**One caption per person, not one caption copied three times.** Each person's
+post is about the part of the system they actually built, so a reply asking a
+question lands on someone who can answer it. Three near-identical posts read as
+spam and say nothing about a three-person team.
 
-> Speak a question, get an answer grounded in MS MARCO with citations. About a second, end to end, from India.
+Every caption below is under X's 280-character limit **with the link counted at
+23 characters**, which is how X bills any URL regardless of length. Do not add a
+second link.
+
+### X — Samartha (latency and architecture)
+
+> Voice in, cited answer out.
 >
-> Our own pipeline — transcript to final token — is 142ms. Almost all the rest is the round trip to a hosted LLM. We publish both numbers.
+> Our pipeline — transcript to final token — is 142ms. End to end from India it's ~1s: the LLM call crosses the Pacific.
 >
-> Six chunking strategies, ablated against real human relevance judgements. Hybrid dense+BM25. Guardrails that decline when the corpus can't answer.
+> We publish both numbers. Either one alone is a lie.
+>
+> https://voicerag-demo.duckdns.org
 >
 > #RAGInGoa
 
-### X — version B
+`236 chars.`
 
-> Speak a question → grounded answer with citations.
+### X — Risheeth (guardrails and tests)
+
+> We built a voice RAG system that knows when to shut up.
 >
-> The trick: we fire retrieval on *partial* transcripts. By the time you stop talking, the search is already done — retrieval is 7ms of a 142ms pipeline.
+> Ask it what a 2018 web crawl never covered and it declines — and says why: both retrievers agreed on nothing, top passage 0.56 against a 0.62 floor.
 >
-> Built for @247pmstudio HH Goa 2026.
+> 563 tests, offline, no keys.
+>
+> https://voicerag-demo.duckdns.org
 >
 > #RAGInGoa
 
-### X — version C
+`271 chars.`
 
-> Most RAG demos pick one chunking strategy and hope.
+### X — third teammate (retrieval and the ablation)
+
+> Most RAG demos pick a chunking strategy and hope.
 >
-> We built six, scored them on Recall@k / MRR / nDCG against human labels, and shipped the winner.
+> We built six, scored them on Recall@k / MRR / nDCG against the dataset's own human relevance labels, and shipped the winner.
 >
-> Voice in, cited answer out — 142ms of pipeline, and we show you where every millisecond went.
+> The table is in the repo — including the five that lost.
+>
+> https://voicerag-demo.duckdns.org
 >
 > #RAGInGoa
+
+`269 chars.`
+
+### Instagram — Samartha
+
+Instagram truncates at roughly 125 characters, so the first line has to work
+alone. Links are not clickable in captions: put the demo URL in your bio first.
+
+> Speak a question. Get an answer with citations and a receipt for every millisecond. ⚡
+>
+> Built for HH Goa 2026 — a voice RAG system over ~196k MS MARCO passages.
+>
+> Our pipeline runs transcript to final token in 142ms. End to end from India it's about a second, because a hosted LLM call crosses the Pacific — geography, not engineering. Both numbers are published, measured at P50/P70/P100 across real queries rather than one lucky run.
+>
+> Retrieval fires on partial transcripts while you're still talking, so the search is usually finished before you stop.
+>
+> Link in bio 🔗
+>
+> #RAGInGoa
+
+### Instagram — Risheeth
+
+> It's easy to build a demo that always answers. We built one that refuses. 🚫
+>
+> HH Goa 2026 — voice-enabled RAG over ~196k MS MARCO passages.
+>
+> Three guardrails, ordered by cost. A sub-millisecond input guard catches jailbreaks and harmful requests before they cost a retrieval. An abstention gate reads the retrieval signals. Grounding checks every sentence against the passages it cited.
+>
+> Ask it something the corpus doesn't cover and it doesn't guess — it tells you which retrievers disagreed and how far the best passage fell short.
+>
+> 563 tests, all offline, no API keys. Clone it and run the suite on a plane.
+>
+> Link in bio 🔗
+>
+> #RAGInGoa
+
+### Instagram — third teammate
+
+> Six chunking strategies. We built all six and made them compete. 📊
+>
+> HH Goa 2026 — voice-enabled RAG over ~196k MS MARCO passages.
+>
+> Fixed, recursive, sentence-window, metadata-aware, semantic and contextual — all implemented behind one interface, then scored on Recall@1/5/10, MRR@10 and nDCG@10 against the dataset's own human relevance judgements. Recursive won at R@10 0.91, and we shipped it because we can show you the table, not because it felt right.
+>
+> We published what lost, too: an index five times larger that missed the latency budget, and an abstention gate that scores at chance. Both are in the repo.
+>
+> Link in bio 🔗
+>
+> #RAGInGoa
+
 
 ### LinkedIn (adapt per person)
 
@@ -135,21 +203,11 @@ Vary the wording per person — three identical posts read as spam and reflect b
 >
 > • **Speculative retrieval.** Search fires on partial transcripts while you're still speaking, so retrieval is usually finished before you stop.
 >
-> • **It knows when not to answer.** Abstention is driven by retrieval signals — score gap, entropy, dense/sparse agreement — and evaluated against genuinely labelled unanswerable queries from the dataset, not hand-written examples.
+> • **We published the result that went against us.** We built an abstention gate on retrieval signals — score gap, entropy, dense/sparse agreement — evaluated it against MS MARCO's own labelled unanswerable queries, and it scored at chance. That is in the README with the reason it cannot work, because a gate reading only retrieval scores is blind to a passage that is on topic and still doesn't contain the answer. The refusals you see in the demo come from the two stages that read the passage text.
 >
 > The single biggest latency win wasn't in the model layer. The standard browser voice-activity library waits 1.4 seconds of silence before deciding you've stopped talking. We run it at 260ms.
 >
 > Repo and demo below. Built with [teammates].
->
-> #RAGInGoa
-
-### Instagram (caption — keep it short, the video carries it)
-
-> Speak a question. Get a cited answer, with a receipt for every millisecond. ⚡
->
-> Six chunking strategies, benchmarked against real human relevance labels. Retrieval that starts before you finish talking. And guardrails that say "I don't know" when the corpus genuinely doesn't.
->
-> Built for HH Goa 2026 🌴
 >
 > #RAGInGoa
 
