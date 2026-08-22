@@ -92,104 +92,111 @@ the proof.
 
 Each member posts **both videos** to **Instagram, X, LinkedIn** with `#RAGInGoa`.
 
-**One caption per person, not one caption copied three times.** Each person's
-post is about the part of the system they actually built, so a reply asking a
-question lands on someone who can answer it. Three near-identical posts read as
-spam and say nothing about a three-person team.
+**One caption per person, not one copied three times.** Each person leads with a
+different angle, so a reply lands on someone who can answer it — and three
+near-identical posts read as spam.
 
-Every caption below is under X's 280-character limit **with the link counted at
-23 characters**, which is how X bills any URL regardless of length. Do not add a
-second link.
+**These are captions, not the video script.** A person scrolling has about a
+second to decide. No metrics, no jargon, at most one number — anyone who wants
+`R@10 0.9070` can click through to the repo, and everyone else needs to
+understand what the thing *is*. Keep it that way if you rewrite them.
 
-### X — Samartha (latency and architecture)
+Every X caption below is under the 280 limit **with the link counted at 23
+characters**, which is how X bills any URL. Don't add a second link.
 
-> Voice in, cited answer out.
+### X — Samartha
+
+> Spent the last nine days building this with two friends.
 >
-> Our pipeline — transcript to final token — is 142ms. End to end from India it's ~1s: the LLM call crosses the Pacific.
+> You ask a question out loud. It answers in about a second — and shows you the source it got the answer from.
 >
-> We publish both numbers. Either one alone is a lie.
+> And when it doesn't know, it says so instead of making something up.
 >
 > https://voicerag-demo.duckdns.org
 >
 > #RAGInGoa
 
-`236 chars.`
+`272 / 280`
 
-### X — Risheeth (guardrails and tests)
+### X — Risheeth
 
-> We built a voice RAG system that knows when to shut up.
+> Most AI will confidently make something up rather than admit it doesn't know.
 >
-> Ask it what a 2018 web crawl never covered and it declines — and says why: both retrievers agreed on nothing, top passage 0.56 against a 0.62 floor.
+> We built ours to admit it.
 >
-> 563 tests, offline, no keys.
+> Ask it about something it hasn't read and it refuses — and tells you why, instead of guessing.
+>
+> Nine days, three of us.
 >
 > https://voicerag-demo.duckdns.org
 >
 > #RAGInGoa
 
-`271 chars.`
+`262 / 280`
 
-### X — third teammate (retrieval and the ablation)
+### X — third teammate
 
-> Most RAG demos pick a chunking strategy and hope.
+> You talk. It listens. It answers — and shows you where the answer came from.
 >
-> We built six, scored them on Recall@k / MRR / nDCG against the dataset's own human relevance labels, and shipped the winner.
+> Nine days of building this with two friends for HH Goa 2026.
 >
-> The table is in the repo — including the five that lost.
+> Ask it anything out loud and check its working.
 >
 > https://voicerag-demo.duckdns.org
 >
 > #RAGInGoa
 
-`269 chars.`
+`223 / 280`
 
-### Instagram — Samartha
+### Instagram
 
-Instagram truncates at roughly 125 characters, so the first line has to work
-alone. Links are not clickable in captions: put the demo URL in your bio first.
+Instagram cuts the caption at roughly 125 characters, so the first line has to
+work on its own — that is the only part most people read. Links aren't clickable
+in captions: **put the demo URL in your bio before you post.**
 
-> Speak a question. Get an answer with citations and a receipt for every millisecond. ⚡
+**Samartha**
+
+> Ask a question out loud. Get an answer back in about a second. ⚡
 >
-> Built for HH Goa 2026 — a voice RAG system over ~196k MS MARCO passages.
+> We spent nine days building a voice assistant that shows its work — every answer comes with the source it came from, so you can actually check it.
 >
-> Our pipeline runs transcript to final token in 142ms. End to end from India it's about a second, because a hosted LLM call crosses the Pacific — geography, not engineering. Both numbers are published, measured at P50/P70/P100 across real queries rather than one lucky run.
+> And when it doesn't know something, it tells you. That part was harder to build than the answering.
 >
-> Retrieval fires on partial transcripts while you're still talking, so the search is usually finished before you stop.
->
-> Link in bio 🔗
+> Our entry for HH Goa 2026 🌴
+> Link in bio.
 >
 > #RAGInGoa
 
-### Instagram — Risheeth
+**Risheeth**
 
-> It's easy to build a demo that always answers. We built one that refuses. 🚫
+> Most AI would rather make something up than say "I don't know". 🚫
 >
-> HH Goa 2026 — voice-enabled RAG over ~196k MS MARCO passages.
+> We built ours to say it.
 >
-> Three guardrails, ordered by cost. A sub-millisecond input guard catches jailbreaks and harmful requests before they cost a retrieval. An abstention gate reads the retrieval signals. Grounding checks every sentence against the passages it cited.
+> Ask it about something it hasn't read and it refuses — and tells you why it can't answer, instead of guessing at it.
 >
-> Ask it something the corpus doesn't cover and it doesn't guess — it tells you which retrievers disagreed and how far the best passage fell short.
+> Three of us, nine days, one very long week.
 >
-> 563 tests, all offline, no API keys. Clone it and run the suite on a plane.
->
-> Link in bio 🔗
+> Our entry for HH Goa 2026 🌴
+> Link in bio.
 >
 > #RAGInGoa
 
-### Instagram — third teammate
+**Third teammate**
 
-> Six chunking strategies. We built all six and made them compete. 📊
+> You talk. It listens. It answers — with receipts. 🎙️
 >
-> HH Goa 2026 — voice-enabled RAG over ~196k MS MARCO passages.
+> Nine days of building this with two friends. Ask a question out loud and get an answer pulled from real sources, with the source shown to you every time.
 >
-> Fixed, recursive, sentence-window, metadata-aware, semantic and contextual — all implemented behind one interface, then scored on Recall@1/5/10, MRR@10 and nDCG@10 against the dataset's own human relevance judgements. Recursive won at R@10 0.91, and we shipped it because we can show you the table, not because it felt right.
+> No typing, no signup. Just ask.
 >
-> We published what lost, too: an index five times larger that missed the latency budget, and an abstention gate that scores at chance. Both are in the repo.
->
-> Link in bio 🔗
+> Our entry for HH Goa 2026 🌴
+> Link in bio.
 >
 > #RAGInGoa
 
+**LinkedIn is the one place the detail belongs** — it is a professional audience
+and the numbers are the point there. That draft is below, left long on purpose.
 
 ### LinkedIn (adapt per person)
 
